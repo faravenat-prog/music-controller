@@ -23,10 +23,10 @@
             android:id="@+id/btnPrevious"
             android:layout_width="104dp"
             android:layout_height="104dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:padding="16dp"
+            android:background="@drawable/bg_circle_green_light"
+            android:padding="22dp"
             android:src="@drawable/ic_skip_previous"
-            android:tint="@color/text_primary" />
+            android:tint="@color/bg_dark" />
 
         <ImageButton
             android:id="@+id/btnPlayPause"
@@ -42,10 +42,10 @@
             android:id="@+id/btnNext"
             android:layout_width="104dp"
             android:layout_height="104dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:padding="16dp"
+            android:background="@drawable/bg_circle_green_light"
+            android:padding="22dp"
             android:src="@drawable/ic_skip_next"
-            android:tint="@color/text_primary" />
+            android:tint="@color/bg_dark" />
 
     </LinearLayout>
 
@@ -66,10 +66,10 @@
             android:id="@+id/btnVolumeDown"
             android:layout_width="104dp"
             android:layout_height="104dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:padding="20dp"
+            android:background="@drawable/bg_circle_blue_light"
+            android:padding="22dp"
             android:src="@drawable/ic_volume_down"
-            android:tint="@color/text_secondary" />
+            android:tint="@color/bg_dark" />
 
         <SeekBar
             android:id="@+id/volumeSlider"
@@ -85,10 +85,10 @@
             android:id="@+id/btnVolumeUp"
             android:layout_width="104dp"
             android:layout_height="104dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:padding="20dp"
+            android:background="@drawable/bg_circle_blue_light"
+            android:padding="22dp"
             android:src="@drawable/ic_volume_up"
-            android:tint="@color/text_secondary" />
+            android:tint="@color/bg_dark" />
 
     </LinearLayout>
 
