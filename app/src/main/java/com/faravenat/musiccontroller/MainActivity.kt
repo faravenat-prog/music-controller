@@ -1,7 +1,11 @@
 package com.faravenat.musiccontroller
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
+import android.location.LocationListener
+import android.location.LocationManager
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
@@ -11,9 +15,14 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.view.WindowManager
 import android.widget.SeekBar
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -23,17 +32,37 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var audioManager: AudioManager
+
+    // Media
     private var mediaSessionManager: MediaSessionManager? = null
     private var activeController: MediaController? = null
     private var controllerCallback: MediaController.Callback? = null
     private var sessionListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
-
     private val progressHandler = Handler(Looper.getMainLooper())
     private val progressRunnable = object : Runnable {
         override fun run() {
             updateProgress()
             progressHandler.postDelayed(this, 1000)
         }
+    }
+
+    // Cámara
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var cameraActive = false
+
+    // GPS
+    private var locationManager: LocationManager? = null
+    private val locationListener = LocationListener { location ->
+        if (location.hasSpeed()) {
+            val kmh = location.speed * 3.6f
+            runOnUiThread {
+                binding.tvSpeed.text = "🚴 ${"%.1f".format(kmh)} km/h"
+            }
+        }
+    }
+
+    companion object {
+        private const val PERMISSIONS_REQUEST = 100
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,6 +74,8 @@ class MainActivity : AppCompatActivity() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         setupVolumeControls()
         setupMediaButtons()
+        setupCameraButton()
+        requestNeededPermissions()
     }
 
     override fun onResume() {
@@ -56,20 +87,94 @@ class MainActivity : AppCompatActivity() {
             showPermissionDialog()
         }
         progressHandler.post(progressRunnable)
+        startGps()
     }
 
     override fun onPause() {
         super.onPause()
         progressHandler.removeCallbacks(progressRunnable)
         disconnectSessions()
+        stopCamera()
+        stopGps()
     }
 
     private fun setupFullscreen() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
+
+    private fun requestNeededPermissions() {
+        val needed = mutableListOf<String>()
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.CAMERA)
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (needed.isNotEmpty())
+            requestPermissions(needed.toTypedArray(), PERMISSIONS_REQUEST)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == PERMISSIONS_REQUEST) {
+            grantResults.forEachIndexed { i, result ->
+                if (result == PackageManager.PERMISSION_GRANTED) {
+                    when (permissions[i]) {
+                        Manifest.permission.ACCESS_FINE_LOCATION -> startGps()
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Cámara ---
+
+    private fun setupCameraButton() {
+        binding.btnCamera.setOnClickListener {
+            if (cameraActive) stopCamera() else startCamera()
+        }
+    }
+
+    private fun startCamera() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
+        val future = ProcessCameraProvider.getInstance(this)
+        future.addListener({
+            cameraProvider = future.get()
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(binding.cameraPreview.surfaceProvider)
+            }
+            try {
+                cameraProvider?.unbindAll()
+                cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview)
+                cameraActive = true
+                binding.cameraPreview.visibility = android.view.View.VISIBLE
+                binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
+            } catch (e: Exception) { /* cámara no disponible */ }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun stopCamera() {
+        cameraProvider?.unbindAll()
+        cameraActive = false
+        binding.cameraPreview.visibility = android.view.View.INVISIBLE
+        binding.btnCamera.setImageResource(R.drawable.ic_camera_on)
+    }
+
+    // --- GPS ---
+
+    private fun startGps() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+        locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
+        locationManager?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0f, locationListener)
+    }
+
+    private fun stopGps() {
+        locationManager?.removeUpdates(locationListener)
+    }
+
+    // --- Volumen ---
 
     private fun setupVolumeControls() {
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
@@ -94,20 +199,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // --- Media ---
+
     private fun setupMediaButtons() {
-        binding.btnPrevious.setOnClickListener {
-            activeController?.transportControls?.skipToPrevious()
-        }
-        binding.btnNext.setOnClickListener {
-            activeController?.transportControls?.skipToNext()
-        }
+        binding.btnPrevious.setOnClickListener { activeController?.transportControls?.skipToPrevious() }
+        binding.btnNext.setOnClickListener { activeController?.transportControls?.skipToNext() }
         binding.btnPlayPause.setOnClickListener {
             val state = activeController?.playbackState?.state
-            if (state == PlaybackState.STATE_PLAYING) {
-                activeController?.transportControls?.pause()
-            } else {
-                activeController?.transportControls?.play()
-            }
+            if (state == PlaybackState.STATE_PLAYING) activeController?.transportControls?.pause()
+            else activeController?.transportControls?.play()
         }
     }
 
@@ -132,7 +232,6 @@ class MainActivity : AppCompatActivity() {
         val mgr = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
         mediaSessionManager = mgr
         val cn = ComponentName(this, MediaService::class.java)
-
         try {
             val listener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
                 setController(controllers?.firstOrNull())
@@ -154,11 +253,7 @@ class MainActivity : AppCompatActivity() {
     private fun setController(controller: MediaController?) {
         controllerCallback?.let { activeController?.unregisterCallback(it) }
         activeController = controller
-
-        if (controller == null) {
-            showNoMusicState()
-            return
-        }
+        if (controller == null) { showNoMusicState(); return }
 
         val cb = object : MediaController.Callback() {
             override fun onMetadataChanged(metadata: MediaMetadata?) = updateMetadataUI(metadata)
@@ -166,7 +261,6 @@ class MainActivity : AppCompatActivity() {
         }
         controllerCallback = cb
         controller.registerCallback(cb)
-
         updateMetadataUI(controller.metadata)
         updatePlaybackUI(controller.playbackState)
     }
@@ -174,7 +268,6 @@ class MainActivity : AppCompatActivity() {
     private fun showNoMusicState() {
         binding.tvSongTitle.text = "Sin música activa"
         binding.tvArtist.text = "Abre Spotify, YouTube Music u otra app"
-        binding.ivArtwork.setImageResource(R.drawable.ic_music_note)
         binding.btnPlayPause.setImageResource(R.drawable.ic_play)
         binding.progressBar.progress = 0
         binding.tvCurrentTime.text = "0:00"
@@ -184,26 +277,16 @@ class MainActivity : AppCompatActivity() {
     private fun updateMetadataUI(metadata: MediaMetadata?) {
         binding.tvSongTitle.text = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "Desconocido"
         binding.tvArtist.text = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
-
-        val artwork = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-            ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
-        if (artwork != null) {
-            binding.ivArtwork.setImageBitmap(artwork)
-        } else {
-            binding.ivArtwork.setImageResource(R.drawable.ic_music_note)
-        }
-
         val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
         binding.progressBar.max = if (duration > 0) (duration / 1000).toInt() else 100
         binding.tvTotalTime.text = formatTime(duration)
     }
 
     private fun updatePlaybackUI(state: PlaybackState?) {
-        if (state?.state == PlaybackState.STATE_PLAYING) {
+        if (state?.state == PlaybackState.STATE_PLAYING)
             binding.btnPlayPause.setImageResource(R.drawable.ic_pause)
-        } else {
+        else
             binding.btnPlayPause.setImageResource(R.drawable.ic_play)
-        }
     }
 
     private fun updateProgress() {
@@ -211,11 +294,8 @@ class MainActivity : AppCompatActivity() {
         val positionMs = if (state.state == PlaybackState.STATE_PLAYING) {
             val elapsed = System.currentTimeMillis() - state.lastPositionUpdateTime
             state.position + (elapsed * state.playbackSpeed).toLong()
-        } else {
-            state.position
-        }
-        val positionSec = (positionMs / 1000).toInt()
-        binding.progressBar.progress = positionSec
+        } else state.position
+        binding.progressBar.progress = (positionMs / 1000).toInt()
         binding.tvCurrentTime.text = formatTime(positionMs)
     }
 
@@ -225,8 +305,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun formatTime(ms: Long): String {
         val totalSec = ms / 1000
-        val min = totalSec / 60
-        val sec = totalSec % 60
-        return "%d:%02d".format(min, sec)
+        return "%d:%02d".format(totalSec / 60, totalSec % 60)
     }
 }

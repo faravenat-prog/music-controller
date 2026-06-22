@@ -6,7 +6,7 @@
     android:layout_height="match_parent"
     android:background="@color/bg_dark"
     android:paddingTop="48dp"
-    android:paddingBottom="24dp">
+    android:paddingBottom="16dp">
 
     <!-- Botones cambiar canción ARRIBA -->
     <LinearLayout
@@ -98,7 +98,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="32dp"
-        android:layout_marginTop="20dp"
+        android:layout_marginTop="14dp"
         android:ellipsize="marquee"
         android:focusable="true"
         android:marqueeRepeatLimit="marquee_forever"
@@ -134,7 +134,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="32dp"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="10dp"
         android:progressTint="@color/accent"
         android:thumbTint="@color/accent"
         android:progressBackgroundTint="@color/bg_surface"
@@ -168,28 +168,68 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@id/progressBar" />
 
-    <!-- Artwork ABAJO -->
-    <com.google.android.material.card.MaterialCardView
-        android:id="@+id/cardArtwork"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_marginHorizontal="32dp"
-        android:layout_marginTop="16dp"
-        app:cardCornerRadius="16dp"
-        app:cardElevation="24dp"
-        app:layout_constraintBottom_toBottomOf="parent"
+    <!-- Stats: velocidad y pulso -->
+    <LinearLayout
+        android:id="@+id/statsRow"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal"
+        android:gravity="center"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/tvCurrentTime">
 
-        <ImageView
-            android:id="@+id/ivArtwork"
+        <TextView
+            android:id="@+id/tvHeartRate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="24dp"
+            android:text="❤️ -- bpm"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/tvSpeed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🚴 -- km/h"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp" />
+
+    </LinearLayout>
+
+    <!-- Preview de cámara con botón encender/apagar -->
+    <FrameLayout
+        android:id="@+id/cameraContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="8dp"
+        android:background="@color/bg_surface"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/statsRow">
+
+        <androidx.camera.view.PreviewView
+            android:id="@+id/cameraPreview"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:scaleType="centerCrop"
-            android:src="@drawable/ic_music_note"
-            android:background="@color/bg_surface" />
+            android:visibility="invisible" />
 
-    </com.google.android.material.card.MaterialCardView>
+        <!-- Botón pequeño encender/apagar cámara -->
+        <ImageButton
+            android:id="@+id/btnCamera"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="top|end"
+            android:layout_margin="8dp"
+            android:background="@drawable/bg_circle_semi"
+            android:padding="10dp"
+            android:src="@drawable/ic_camera_on"
+            android:tint="#FFFFFF" />
+
+    </FrameLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
