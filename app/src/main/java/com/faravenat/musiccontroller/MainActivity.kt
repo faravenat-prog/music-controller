@@ -17,6 +17,9 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.WindowManager
 import android.widget.SeekBar
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -39,9 +42,12 @@ class MainActivity : AppCompatActivity() {
     private var controllerCallback: MediaController.Callback? = null
     private var sessionListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
     private val progressHandler = Handler(Looper.getMainLooper())
+    private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+
     private val progressRunnable = object : Runnable {
         override fun run() {
             updateProgress()
+            binding.tvTime.text = "🕐 ${timeFormat.format(Date())}"
             progressHandler.postDelayed(this, 1000)
         }
     }
