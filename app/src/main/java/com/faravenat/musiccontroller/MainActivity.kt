@@ -17,9 +17,6 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.WindowManager
 import android.widget.SeekBar
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -29,7 +26,21 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.lifecycle.lifecycleScope
 import com.faravenat.musiccontroller.databinding.ActivityMainBinding
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.time.Instant
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -41,9 +52,8 @@ class MainActivity : AppCompatActivity() {
     private var activeController: MediaController? = null
     private var controllerCallback: MediaController.Callback? = null
     private var sessionListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
-    private val progressHandler = Handler(Looper.getMainLooper())
     private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-
+    private val progressHandler = Handler(Looper.getMainLooper())
     private val progressRunnable = object : Runnable {
         override fun run() {
             updateProgress()
@@ -61,11 +71,25 @@ class MainActivity : AppCompatActivity() {
     private val locationListener = LocationListener { location ->
         if (location.hasSpeed()) {
             val kmh = location.speed * 3.6f
-            runOnUiThread {
-                binding.tvSpeed.text = "🚴 ${"%.1f".format(kmh)} km/h"
-            }
+            runOnUiThread { binding.tvSpeed.text = "🚴 ${"%.1f".format(kmh)} km/h" }
         }
     }
+
+    // Health Connect
+    private var healthClient: HealthConnectClient? = null
+    private val heartRateHandler = Handler(Looper.getMainLooper())
+    private val heartRateRunnable = object : Runnable {
+        override fun run() {
+            lifecycleScope.launch { fetchHeartRate() }
+            heartRateHandler.postDelayed(this, 30_000)
+        }
+    }
+    private val healthPermissions = setOf(
+        HealthPermission.getReadPermission(HeartRateRecord::class)
+    )
+    private val healthPermissionLauncher = registerForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) { lifecycleScope.launch { fetchHeartRate() } }
 
     companion object {
         private const val PERMISSIONS_REQUEST = 100
@@ -81,28 +105,29 @@ class MainActivity : AppCompatActivity() {
         setupVolumeControls()
         setupMediaButtons()
         setupCameraButton()
+        setupHealthConnect()
         requestNeededPermissions()
     }
 
     override fun onResume() {
         super.onResume()
         syncVolumeSlider()
-        if (hasNotificationAccess()) {
-            connectToMediaSessions()
-        } else {
-            showPermissionDialog()
-        }
+        if (hasNotificationAccess()) connectToMediaSessions() else showPermissionDialog()
         progressHandler.post(progressRunnable)
         startGps()
+        heartRateHandler.post(heartRateRunnable)
     }
 
     override fun onPause() {
         super.onPause()
         progressHandler.removeCallbacks(progressRunnable)
+        heartRateHandler.removeCallbacks(heartRateRunnable)
         disconnectSessions()
         stopCamera()
         stopGps()
     }
+
+    // --- Fullscreen y pantalla encendida ---
 
     private fun setupFullscreen() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -112,26 +137,61 @@ class MainActivity : AppCompatActivity() {
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
+    // --- Permisos cámara y GPS ---
+
     private fun requestNeededPermissions() {
         val needed = mutableListOf<String>()
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
             needed.add(Manifest.permission.CAMERA)
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
             needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (needed.isNotEmpty())
-            requestPermissions(needed.toTypedArray(), PERMISSIONS_REQUEST)
+        if (needed.isNotEmpty()) requestPermissions(needed.toTypedArray(), PERMISSIONS_REQUEST)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSIONS_REQUEST) {
             grantResults.forEachIndexed { i, result ->
-                if (result == PackageManager.PERMISSION_GRANTED) {
-                    when (permissions[i]) {
-                        Manifest.permission.ACCESS_FINE_LOCATION -> startGps()
-                    }
-                }
+                if (result == PackageManager.PERMISSION_GRANTED && permissions[i] == Manifest.permission.ACCESS_FINE_LOCATION)
+                    startGps()
             }
+        }
+    }
+
+    // --- Health Connect (pulso Mi Band 8) ---
+
+    private fun setupHealthConnect() {
+        if (HealthConnectClient.getSdkStatus(this) == HealthConnectClient.SDK_AVAILABLE) {
+            healthClient = HealthConnectClient.getOrCreate(this)
+            lifecycleScope.launch { checkHealthPermissions() }
+        }
+    }
+
+    private suspend fun checkHealthPermissions() {
+        val granted = healthClient?.permissionController?.getGrantedPermissions() ?: emptySet()
+        if (!granted.containsAll(healthPermissions)) {
+            healthPermissionLauncher.launch(healthPermissions)
+        } else {
+            fetchHeartRate()
+        }
+    }
+
+    private suspend fun fetchHeartRate() {
+        try {
+            val client = healthClient ?: return
+            val now = Instant.now()
+            val response = client.readRecords(
+                ReadRecordsRequest(
+                    recordType = HeartRateRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(now.minusSeconds(600), now)
+                )
+            )
+            val bpm = response.records.lastOrNull()?.samples?.lastOrNull()?.beatsPerMinute
+            withContext(Dispatchers.Main) {
+                binding.tvHeartRate.text = if (bpm != null) "❤️ $bpm bpm" else "❤️ -- bpm"
+            }
+        } catch (e: Exception) {
+            // Health Connect no disponible o sin permiso
         }
     }
 
@@ -157,7 +217,7 @@ class MainActivity : AppCompatActivity() {
                 cameraActive = true
                 binding.cameraPreview.visibility = android.view.View.VISIBLE
                 binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
-            } catch (e: Exception) { /* cámara no disponible */ }
+            } catch (e: Exception) { }
         }, ContextCompat.getMainExecutor(this))
     }
 
@@ -183,10 +243,8 @@ class MainActivity : AppCompatActivity() {
     // --- Volumen ---
 
     private fun setupVolumeControls() {
-        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        binding.volumeSlider.max = max
+        binding.volumeSlider.max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         syncVolumeSlider()
-
         binding.volumeSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0)
@@ -194,7 +252,6 @@ class MainActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(sb: SeekBar?) {}
             override fun onStopTrackingTouch(sb: SeekBar?) {}
         })
-
         binding.btnVolumeDown.setOnClickListener {
             audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0)
             syncVolumeSlider()
@@ -226,7 +283,7 @@ class MainActivity : AppCompatActivity() {
     private fun showPermissionDialog() {
         AlertDialog.Builder(this)
             .setTitle("Permiso necesario")
-            .setMessage("Para controlar la música, esta app necesita acceso a las notificaciones.\n\nToca Abrir, activa la app en la lista y vuelve.")
+            .setMessage("Para controlar la música necesita acceso a las notificaciones.\n\nToca Abrir, activa la app en la lista y vuelve.")
             .setPositiveButton("Abrir") { _, _ ->
                 startActivity(android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
             }
@@ -245,9 +302,7 @@ class MainActivity : AppCompatActivity() {
             sessionListener = listener
             mgr.addOnActiveSessionsChangedListener(listener, cn)
             setController(mgr.getActiveSessions(cn).firstOrNull())
-        } catch (e: SecurityException) {
-            showPermissionDialog()
-        }
+        } catch (e: SecurityException) { showPermissionDialog() }
     }
 
     private fun disconnectSessions() {
@@ -260,7 +315,6 @@ class MainActivity : AppCompatActivity() {
         controllerCallback?.let { activeController?.unregisterCallback(it) }
         activeController = controller
         if (controller == null) { showNoMusicState(); return }
-
         val cb = object : MediaController.Callback() {
             override fun onMetadataChanged(metadata: MediaMetadata?) = updateMetadataUI(metadata)
             override fun onPlaybackStateChanged(state: PlaybackState?) = updatePlaybackUI(state)
@@ -310,7 +364,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun formatTime(ms: Long): String {
-        val totalSec = ms / 1000
-        return "%d:%02d".format(totalSec / 60, totalSec % 60)
+        val s = ms / 1000
+        return "%d:%02d".format(s / 60, s % 60)
     }
 }
