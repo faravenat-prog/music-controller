@@ -63,9 +63,6 @@ class MainActivity : AppCompatActivity() {
     private var ppppClient: PpppClient? = null
     private var cameraActive = false
 
-    companion object {
-        private const val CAMERA_IP = "10.165.35.30"
-    }
 
     // GPS
     private var locationManager: LocationManager? = null
@@ -205,7 +202,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun startCamera() {
         val client = PpppClient(
-            cameraIp = CAMERA_IP,
             onFrame = { jpegBytes ->
                 val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return@PpppClient
                 runOnUiThread {

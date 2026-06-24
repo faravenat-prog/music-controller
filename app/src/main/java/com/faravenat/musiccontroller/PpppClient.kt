@@ -5,9 +5,9 @@ import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.NetworkInterface
 
 class PpppClient(
-    private val cameraIp: String,
     private val onFrame: (ByteArray) -> Unit,
     private val onStatus: (String) -> Unit
 ) {
@@ -41,9 +41,10 @@ class PpppClient(
 
                 withContext(Dispatchers.Main) { onStatus("Buscando cámara...") }
 
-                // Enviar probe directamente a la IP conocida de la cámara
-                val camAddr = InetAddress.getByName(cameraIp)
-                sock.send(DatagramPacket(PROBE, PROBE.size, camAddr, DISCOVERY_PORT))
+                // Enviar probe a todas las interfaces de red (hotspot, WiFi, etc.)
+                broadcastAddresses().forEach { addr ->
+                    sock.send(DatagramPacket(PROBE, PROBE.size, addr, DISCOVERY_PORT))
+                }
 
                 // Esperar MSG_PUNCH
                 val buf = ByteArray(2048)
@@ -102,6 +103,21 @@ class PpppClient(
                 socket?.close()
             }
         }
+    }
+
+    private fun broadcastAddresses(): List<InetAddress> {
+        val result = mutableListOf<InetAddress>()
+        runCatching {
+            NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
+                if (!iface.isLoopback && iface.isUp) {
+                    iface.interfaceAddresses.forEach { addr ->
+                        addr.broadcast?.let { result.add(it) }
+                    }
+                }
+            }
+        }
+        if (result.isEmpty()) result.add(InetAddress.getByName("255.255.255.255"))
+        return result
     }
 
     private fun handlePacket(
