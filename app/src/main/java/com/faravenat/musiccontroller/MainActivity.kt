@@ -38,14 +38,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import android.view.View
 import android.widget.Toast
+import com.faravenat.musiccontroller.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import java.net.Socket
-import com.faravenat.musiccontroller.databinding.ActivityMainBinding
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Date
@@ -226,7 +226,7 @@ class MainActivity : AppCompatActivity() {
             kotlinx.coroutines.coroutineScope {
                 async(Dispatchers.IO) {
                     try {
-                        Socket().use { it.connect(java.net.InetSocketAddress(CAMERA_IP, port), 1500); port }
+                        Socket().use { it.connect(InetSocketAddress(CAMERA_IP, port), 1500); port }
                     } catch (e: Exception) { null }
                 }
             }
