@@ -198,7 +198,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupCameraButton() {
         binding.btnCamera.setOnClickListener {
-            if (cameraActive) stopCamera() else startCamera()
+            if (ppppClient != null) stopCamera() else startCamera()
         }
     }
 
@@ -218,7 +218,7 @@ class MainActivity : AppCompatActivity() {
             onStatus = { msg ->
                 runOnUiThread {
                     Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-                    if (msg.startsWith("Error") || msg.startsWith("Sin") || msg.startsWith("No")) {
+                    if (msg.startsWith("Error") || msg.startsWith("Cámara no")) {
                         stopCamera()
                     }
                 }

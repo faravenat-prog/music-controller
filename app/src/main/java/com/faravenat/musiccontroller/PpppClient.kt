@@ -17,11 +17,11 @@ class PpppClient(
     companion object {
         private val PROBE = byteArrayOf(0x2c, 0xba.toByte(), 0x5f, 0x5d)
         private const val DISCOVERY_PORT = 32108
-        private const val MSG_PUNCH    = 0x41
-        private const val MSG_P2P_RDY  = 0x42
-        private const val MSG_DRW      = 0xd0
-        private const val MSG_DRW_ACK  = 0xd1
-        private const val MSG_ALIVE    = 0xe0
+        private const val MSG_PUNCH     = 0x41
+        private const val MSG_P2P_RDY   = 0x42
+        private const val MSG_DRW       = 0xd0
+        private const val MSG_DRW_ACK   = 0xd1
+        private const val MSG_ALIVE     = 0xe0
         private const val MSG_ALIVE_ACK = 0xe1
         private val FRAME_MAGIC = byteArrayOf(0x55, 0xaa.toByte(), 0x15, 0xa8.toByte(), 0x03, 0x00)
         private const val FRAME_HEADER_SIZE = 0x20
@@ -35,32 +35,41 @@ class PpppClient(
             try {
                 val sock = DatagramSocket(0).also {
                     it.broadcast = true
-                    it.soTimeout = 3000
                     socket = it
                 }
 
                 withContext(Dispatchers.Main) { onStatus("Buscando cámara...") }
 
-                // Enviar probe a todas las interfaces de red (hotspot, WiFi, etc.)
-                broadcastAddresses().forEach { addr ->
-                    sock.send(DatagramPacket(PROBE, PROBE.size, addr, DISCOVERY_PORT))
+                // Discovery con reintentos: enviar probe cada 2s hasta 10s
+                val broadcasts = broadcastAddresses()
+                var peerAddr: InetAddress? = null
+                var peerPort = 0
+                val punchBuf = ByteArray(2048)
+                val punchPkt = DatagramPacket(punchBuf, punchBuf.size)
+                val deadline = System.currentTimeMillis() + 10_000
+
+                sock.soTimeout = 2000
+                while (peerAddr == null && System.currentTimeMillis() < deadline && isActive) {
+                    broadcasts.forEach { addr ->
+                        runCatching { sock.send(DatagramPacket(PROBE, PROBE.size, addr, DISCOVERY_PORT)) }
+                    }
+                    try {
+                        punchPkt.setData(punchBuf)
+                        sock.receive(punchPkt)
+                        if ((punchBuf[1].toInt() and 0xFF) == MSG_PUNCH) {
+                            peerAddr = punchPkt.address
+                            peerPort = punchPkt.port
+                        }
+                    } catch (_: java.net.SocketTimeoutException) { /* reintento */ }
                 }
 
-                // Esperar MSG_PUNCH
-                val buf = ByteArray(2048)
-                val pkt = DatagramPacket(buf, buf.size)
-                sock.receive(pkt)
-
-                if ((buf[1].toInt() and 0xFF) != MSG_PUNCH) {
-                    withContext(Dispatchers.Main) { onStatus("Sin respuesta de la cámara") }
+                if (peerAddr == null) {
+                    withContext(Dispatchers.Main) { onStatus("Cámara no encontrada") }
                     return@launch
                 }
 
-                val punchData = buf.copyOf(pkt.length)
-                val peerAddr = pkt.address
-                val peerPort = pkt.port
-
                 // Echo del PUNCH (hasta 5 veces)
+                val punchData = punchBuf.copyOf(punchPkt.length)
                 repeat(5) {
                     sock.send(DatagramPacket(punchData, punchData.size, peerAddr, peerPort))
                 }
@@ -72,13 +81,13 @@ class PpppClient(
                 sock.receive(rdyPkt)
 
                 if ((rdyBuf[1].toInt() and 0xFF) != MSG_P2P_RDY) {
-                    withContext(Dispatchers.Main) { onStatus("No se estableció conexión P2P") }
+                    withContext(Dispatchers.Main) { onStatus("Cámara no respondió P2P") }
                     return@launch
                 }
 
                 // Pedir stream de video
                 sendCmd(sock, peerAddr, peerPort, VIDEO_CMD)
-                withContext(Dispatchers.Main) { onStatus("Conectado") }
+                withContext(Dispatchers.Main) { onStatus("Conectado — ${peerAddr.hostAddress}") }
 
                 // Loop de recepción de video
                 sock.soTimeout = 3000
@@ -91,7 +100,7 @@ class PpppClient(
                         videoPkt.setData(videoBuf)
                         sock.receive(videoPkt)
                         handlePacket(videoBuf, videoPkt.length, sock, peerAddr, peerPort, frameData)
-                    } catch (e: java.net.SocketTimeoutException) {
+                    } catch (_: java.net.SocketTimeoutException) {
                         val alive = byteArrayOf(0xf1.toByte(), MSG_ALIVE.toByte(), 0x00, 0x00)
                         sock.send(DatagramPacket(alive, alive.size, peerAddr, peerPort))
                     }
@@ -105,19 +114,27 @@ class PpppClient(
         }
     }
 
+    // Direcciones broadcast a probar: interfaz real + comunes de hotspot Android
     private fun broadcastAddresses(): List<InetAddress> {
-        val result = mutableListOf<InetAddress>()
+        val seen = LinkedHashSet<String>()
         runCatching {
             NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
                 if (!iface.isLoopback && iface.isUp) {
-                    iface.interfaceAddresses.forEach { addr ->
-                        addr.broadcast?.let { result.add(it) }
+                    iface.interfaceAddresses.forEach { ia ->
+                        ia.broadcast?.hostAddress?.let { seen.add(it) }
                     }
                 }
             }
         }
-        if (result.isEmpty()) result.add(InetAddress.getByName("255.255.255.255"))
-        return result
+        // Subredes de hotspot más comunes en Android (Samsung, AOSP, etc.)
+        seen += listOf(
+            "192.168.43.255",
+            "192.168.49.255",
+            "10.0.0.255",
+            "172.20.10.255",
+            "255.255.255.255"
+        )
+        return seen.map { InetAddress.getByName(it) }
     }
 
     private fun handlePacket(
@@ -133,7 +150,6 @@ class PpppClient(
         when (msgType) {
             MSG_DRW -> {
                 if (len < 8) return
-                // Responder con ACK
                 val ack = byteArrayOf(
                     0xf1.toByte(), MSG_DRW_ACK.toByte(), 0x00, 0x04,
                     0xd1.toByte(), buf[5], buf[6], buf[7]
@@ -177,7 +193,6 @@ class PpppClient(
     private fun emitFrame(frameData: ByteArrayOutputStream) {
         val bytes = frameData.toByteArray()
         frameData.reset()
-        // Buscar inicio del JPEG (FF D8)
         val jpegStart = bytes.indexOfJpegSoi()
         if (jpegStart >= 0) onFrame(bytes.copyOfRange(jpegStart, bytes.size))
     }
@@ -198,7 +213,7 @@ class PpppClient(
         pkt[2] = (size shr 8).toByte()
         pkt[3] = (size and 0xFF).toByte()
         pkt[4] = 0xd1.toByte()
-        pkt[5] = 0x00 // canal CMD
+        pkt[5] = 0x00
         pkt[6] = 0x00
         pkt[7] = 0x00
         enc.copyInto(pkt, 8)
