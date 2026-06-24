@@ -37,6 +37,11 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import android.view.View
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import java.net.Socket
 import com.faravenat.musiccontroller.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -206,11 +211,48 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupCameraButton() {
         binding.btnCamera.setOnClickListener {
-            if (cameraActive) stopCamera() else startCamera()
+            if (cameraActive) stopCamera() else {
+                lifecycleScope.launch { scanAndConnect() }
+            }
         }
     }
 
-    private fun startCamera() {
+    private suspend fun scanAndConnect() {
+        val ports = listOf(554, 8554, 80, 8080, 8000, 1935, 9000, 443)
+        withContext(Dispatchers.Main) {
+            Toast.makeText(this@MainActivity, "Escaneando cámara...", Toast.LENGTH_SHORT).show()
+        }
+        val open = ports.map { port ->
+            kotlinx.coroutines.coroutineScope {
+                async(Dispatchers.IO) {
+                    try {
+                        Socket().use { it.connect(java.net.InetSocketAddress(CAMERA_IP, port), 1500); port }
+                    } catch (e: Exception) { null }
+                }
+            }
+        }.awaitAll().filterNotNull()
+
+        withContext(Dispatchers.Main) {
+            if (open.isEmpty()) {
+                Toast.makeText(this@MainActivity, "Cámara no responde en ningún puerto", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this@MainActivity, "Puertos abiertos: ${open.joinToString()}", Toast.LENGTH_LONG).show()
+                when {
+                    554 in open  -> startCamera()
+                    8554 in open -> startCameraPort(8554)
+                    80 in open   -> startCameraMjpeg(80)
+                    8080 in open -> startCameraMjpeg(8080)
+                }
+            }
+        }
+    }
+
+    private fun startCameraPort(port: Int) = startRtsp("rtsp://$CAMERA_IP:$port/")
+    private fun startCameraMjpeg(port: Int) = startRtsp("http://$CAMERA_IP:$port/stream")
+
+    private fun startCamera() = startRtsp("rtsp://$CAMERA_IP:554/")
+
+    private fun startRtsp(url: String) {
         val silentAudio = AudioAttributes.Builder()
             .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
             .setUsage(C.USAGE_MEDIA)
@@ -234,7 +276,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
         val source = RtspMediaSource.Factory()
-            .createMediaSource(MediaItem.fromUri("rtsp://$CAMERA_IP:554/"))
+            .createMediaSource(MediaItem.fromUri(url))
         player.setMediaSource(source)
         player.prepare()
         player.playWhenReady = true
