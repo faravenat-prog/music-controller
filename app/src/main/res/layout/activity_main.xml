@@ -230,10 +230,11 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/statsRow">
 
-        <SurfaceView
+        <ImageView
             android:id="@+id/cameraPreview"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:scaleType="centerCrop"
             android:visibility="gone" />
 
         <!-- Botón pequeño encender/apagar cámara -->

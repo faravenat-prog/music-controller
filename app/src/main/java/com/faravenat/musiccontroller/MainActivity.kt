@@ -29,23 +29,11 @@ import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import android.graphics.BitmapFactory
 import android.view.View
 import android.widget.Toast
 import com.faravenat.musiccontroller.databinding.ActivityMainBinding
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Date
@@ -71,8 +59,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Cámara IP WiFi
-    private var exoPlayer: ExoPlayer? = null
+    // Cámara IP WiFi A9 (protocolo PPPP)
+    private var ppppClient: PpppClient? = null
     private var cameraActive = false
 
     companion object {
@@ -207,86 +195,45 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- Cámara IP WiFi (RTSP) ---
+    // --- Cámara IP WiFi A9 (protocolo PPPP/MJPEG) ---
 
     private fun setupCameraButton() {
         binding.btnCamera.setOnClickListener {
-            if (cameraActive) stopCamera() else {
-                lifecycleScope.launch { scanAndConnect() }
-            }
+            if (cameraActive) stopCamera() else startCamera()
         }
     }
 
-    private suspend fun scanAndConnect() {
-        val ports = listOf(554, 8554, 80, 8080, 8000, 1935, 9000, 443)
-        withContext(Dispatchers.Main) {
-            Toast.makeText(this@MainActivity, "Escaneando $CAMERA_IP...", Toast.LENGTH_SHORT).show()
-        }
-        val open = kotlinx.coroutines.coroutineScope {
-            ports.map { port ->
-                async(Dispatchers.IO) {
-                    try {
-                        Socket().use { it.connect(InetSocketAddress(CAMERA_IP, port), 2000); port }
-                    } catch (e: Exception) { null }
+    private fun startCamera() {
+        val client = PpppClient(
+            cameraIp = CAMERA_IP,
+            onFrame = { jpegBytes ->
+                val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return@PpppClient
+                runOnUiThread {
+                    binding.cameraPreview.setImageBitmap(bmp)
+                    if (!cameraActive) {
+                        cameraActive = true
+                        binding.cameraPreview.visibility = View.VISIBLE
+                        binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
+                    }
                 }
-            }.awaitAll().filterNotNull()
-        }
-
-        withContext(Dispatchers.Main) {
-            if (open.isEmpty()) {
-                Toast.makeText(this@MainActivity, "Sin respuesta en $CAMERA_IP — ¿cambió la IP?", Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(this@MainActivity, "Puertos abiertos: ${open.joinToString()}", Toast.LENGTH_LONG).show()
-                when {
-                    554 in open  -> startCamera()
-                    8554 in open -> startCameraPort(8554)
-                    80 in open   -> startCameraMjpeg(80)
-                    8080 in open -> startCameraMjpeg(8080)
+            },
+            onStatus = { msg ->
+                runOnUiThread {
+                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                    if (msg.startsWith("Error") || msg.startsWith("Sin") || msg.startsWith("No")) {
+                        stopCamera()
+                    }
                 }
             }
-        }
-    }
-
-    private fun startCameraPort(port: Int) = startRtsp("rtsp://$CAMERA_IP:$port/")
-    private fun startCameraMjpeg(port: Int) = startRtsp("http://$CAMERA_IP:$port/stream")
-
-    private fun startCamera() = startRtsp("rtsp://$CAMERA_IP:554/")
-
-    private fun startRtsp(url: String) {
-        val silentAudio = AudioAttributes.Builder()
-            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-            .setUsage(C.USAGE_MEDIA)
-            .build()
-        val player = ExoPlayer.Builder(this)
-            .setAudioAttributes(silentAudio, false)
-            .build()
-            .also { exoPlayer = it }
-        player.volume = 0f
-        player.setVideoSurfaceView(binding.cameraPreview)
-        player.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_READY) {
-                    cameraActive = true
-                    binding.cameraPreview.visibility = View.VISIBLE
-                    binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
-                }
-            }
-            override fun onPlayerError(error: PlaybackException) {
-                stopCamera()
-            }
-        })
-        val source = RtspMediaSource.Factory()
-            .createMediaSource(MediaItem.fromUri(url))
-        player.setMediaSource(source)
-        player.prepare()
-        player.playWhenReady = true
+        )
+        ppppClient = client
+        client.start(lifecycleScope)
         binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
     }
 
     private fun stopCamera() {
-        exoPlayer?.stop()
-        exoPlayer?.release()
-        exoPlayer = null
+        ppppClient?.stop()
+        ppppClient = null
         cameraActive = false
         binding.cameraPreview.visibility = View.GONE
         binding.btnCamera.setImageResource(R.drawable.ic_camera_on)
