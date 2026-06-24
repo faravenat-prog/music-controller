@@ -234,7 +234,7 @@
             android:id="@+id/cameraPreview"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:visibility="invisible" />
+            android:visibility="gone" />
 
         <!-- Botón pequeño encender/apagar cámara -->
         <ImageButton

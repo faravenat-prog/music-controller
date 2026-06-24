@@ -29,6 +29,8 @@ import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
@@ -206,7 +208,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
-        val player = ExoPlayer.Builder(this).build().also { exoPlayer = it }
+        val silentAudio = AudioAttributes.Builder()
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .setUsage(C.USAGE_MEDIA)
+            .build()
+        val player = ExoPlayer.Builder(this)
+            .setAudioAttributes(silentAudio, false) // false = no robar audio focus
+            .build()
+            .also { exoPlayer = it }
+        player.volume = 0f
         player.setVideoSurfaceView(binding.cameraPreview)
         val source = RtspMediaSource.Factory()
             .setForceUseRtpTcp(true)
@@ -224,7 +234,7 @@ class MainActivity : AppCompatActivity() {
         exoPlayer?.release()
         exoPlayer = null
         cameraActive = false
-        binding.cameraPreview.visibility = android.view.View.INVISIBLE
+        binding.cameraPreview.visibility = android.view.View.GONE
         binding.btnCamera.setImageResource(R.drawable.ic_camera_on)
     }
 
