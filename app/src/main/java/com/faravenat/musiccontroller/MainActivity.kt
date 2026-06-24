@@ -30,7 +30,6 @@ import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import com.faravenat.musiccontroller.databinding.ActivityMainBinding
@@ -208,22 +207,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun startCamera() {
         val player = ExoPlayer.Builder(this).build().also { exoPlayer = it }
-        binding.cameraPreview.player = player
+        player.setVideoSurfaceView(binding.cameraPreview)
         val source = RtspMediaSource.Factory()
             .setForceUseRtpTcp(true)
             .createMediaSource(MediaItem.fromUri(RTSP_URL))
         player.setMediaSource(source)
         player.prepare()
         player.playWhenReady = true
-        player.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_READY) {
-                    binding.cameraPreview.visibility = android.view.View.VISIBLE
-                    binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
-                    cameraActive = true
-                }
-            }
-        })
+        cameraActive = true
+        binding.cameraPreview.visibility = android.view.View.VISIBLE
+        binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
     }
 
     private fun stopCamera() {
