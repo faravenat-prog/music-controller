@@ -19,10 +19,6 @@ import android.view.WindowManager
 import android.widget.SeekBar
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -33,6 +29,10 @@ import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import com.faravenat.musiccontroller.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -62,9 +62,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Cámara
-    private var cameraProvider: ProcessCameraProvider? = null
+    // Cámara IP WiFi
+    private var exoPlayer: ExoPlayer? = null
     private var cameraActive = false
+
+    companion object {
+        private const val RTSP_URL = "rtsp://admin:admin@10.165.35.30:554/stream"
+    }
 
     // GPS
     private var locationManager: LocationManager? = null
@@ -91,9 +95,7 @@ class MainActivity : AppCompatActivity() {
         PermissionController.createRequestPermissionResultContract()
     ) { lifecycleScope.launch { fetchHeartRate() } }
 
-    companion object {
-        private const val PERMISSIONS_REQUEST = 100
-    }
+    private val permissionsRequestCode = 100
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -141,16 +143,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestNeededPermissions() {
         val needed = mutableListOf<String>()
-        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
-            needed.add(Manifest.permission.CAMERA)
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
             needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (needed.isNotEmpty()) requestPermissions(needed.toTypedArray(), PERMISSIONS_REQUEST)
+        if (needed.isNotEmpty()) requestPermissions(needed.toTypedArray(), permissionsRequestCode)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSIONS_REQUEST) {
+        if (requestCode == permissionsRequestCode) {
             grantResults.forEachIndexed { i, result ->
                 if (result == PackageManager.PERMISSION_GRANTED && permissions[i] == Manifest.permission.ACCESS_FINE_LOCATION)
                     startGps()
@@ -177,25 +177,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun fetchHeartRate() {
+        val client = healthClient ?: return
         try {
-            val client = healthClient ?: return
             val now = Instant.now()
             val response = client.readRecords(
                 ReadRecordsRequest(
                     recordType = HeartRateRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(now.minusSeconds(600), now)
+                    timeRangeFilter = TimeRangeFilter.between(now.minusSeconds(7200), now)
                 )
             )
             val bpm = response.records.lastOrNull()?.samples?.lastOrNull()?.beatsPerMinute
             withContext(Dispatchers.Main) {
                 binding.tvHeartRate.text = if (bpm != null) "❤️ $bpm bpm" else "❤️ -- bpm"
             }
+        } catch (e: SecurityException) {
+            withContext(Dispatchers.Main) { binding.tvHeartRate.text = "❤️ sin permiso" }
+            lifecycleScope.launch { checkHealthPermissions() }
         } catch (e: Exception) {
-            // Health Connect no disponible o sin permiso
+            withContext(Dispatchers.Main) { binding.tvHeartRate.text = "❤️ ?? bpm" }
         }
     }
 
-    // --- Cámara ---
+    // --- Cámara IP WiFi (RTSP) ---
 
     private fun setupCameraButton() {
         binding.btnCamera.setOnClickListener {
@@ -204,25 +207,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
-        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
-        val future = ProcessCameraProvider.getInstance(this)
-        future.addListener({
-            cameraProvider = future.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(binding.cameraPreview.surfaceProvider)
+        val player = ExoPlayer.Builder(this).build().also { exoPlayer = it }
+        binding.cameraPreview.player = player
+        val source = RtspMediaSource.Factory()
+            .setForceUseRtpTcp(true)
+            .createMediaSource(MediaItem.fromUri(RTSP_URL))
+        player.setMediaSource(source)
+        player.prepare()
+        player.playWhenReady = true
+        player.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_READY) {
+                    binding.cameraPreview.visibility = android.view.View.VISIBLE
+                    binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
+                    cameraActive = true
+                }
             }
-            try {
-                cameraProvider?.unbindAll()
-                cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview)
-                cameraActive = true
-                binding.cameraPreview.visibility = android.view.View.VISIBLE
-                binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
-            } catch (e: Exception) { }
-        }, ContextCompat.getMainExecutor(this))
+        })
     }
 
     private fun stopCamera() {
-        cameraProvider?.unbindAll()
+        exoPlayer?.stop()
+        exoPlayer?.release()
+        exoPlayer = null
         cameraActive = false
         binding.cameraPreview.visibility = android.view.View.INVISIBLE
         binding.btnCamera.setImageResource(R.drawable.ic_camera_on)
