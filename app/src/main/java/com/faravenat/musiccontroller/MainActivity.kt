@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val CAMERA_IP = "10.165.35.30"
         private val RTSP_CANDIDATES = listOf(
+            "rtsp://$CAMERA_IP:554/",
             "rtsp://$CAMERA_IP:554/stream0",
             "rtsp://$CAMERA_IP:554/live",
             "rtsp://$CAMERA_IP:554/11",
