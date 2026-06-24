@@ -36,6 +36,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import android.view.View
 import com.faravenat.musiccontroller.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -71,19 +72,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val CAMERA_IP = "10.165.35.30"
-        private val RTSP_CANDIDATES = listOf(
-            "rtsp://$CAMERA_IP:554/",
-            "rtsp://$CAMERA_IP:554/stream0",
-            "rtsp://$CAMERA_IP:554/live",
-            "rtsp://$CAMERA_IP:554/11",
-            "rtsp://$CAMERA_IP:554/stream",
-            "rtsp://$CAMERA_IP:554/live/ch0",
-            "rtsp://$CAMERA_IP:554/ch0",
-            "rtsp://$CAMERA_IP:554/h264",
-            "rtsp://$CAMERA_IP:554/12"
-        )
     }
-    private var rtspIndex = 0
 
     // GPS
     private var locationManager: LocationManager? = null
@@ -222,16 +211,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
-        rtspIndex = 0
-        tryRtspUrl()
-    }
-
-    private fun tryRtspUrl() {
-        if (rtspIndex >= RTSP_CANDIDATES.size) {
-            binding.btnCamera.setImageResource(R.drawable.ic_camera_on)
-            return
-        }
-        exoPlayer?.release()
         val silentAudio = AudioAttributes.Builder()
             .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
             .setUsage(C.USAGE_MEDIA)
@@ -244,24 +223,22 @@ class MainActivity : AppCompatActivity() {
         player.setVideoSurfaceView(binding.cameraPreview)
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_READY && !cameraActive) {
+                if (state == Player.STATE_READY) {
                     cameraActive = true
-                    binding.cameraPreview.visibility = android.view.View.VISIBLE
+                    binding.cameraPreview.visibility = View.VISIBLE
                     binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
-                rtspIndex++
-                tryRtspUrl()
+                stopCamera()
             }
         })
-        val forceTcp = rtspIndex > 0
         val source = RtspMediaSource.Factory()
-            .setForceUseRtpTcp(forceTcp)
-            .createMediaSource(MediaItem.fromUri(RTSP_CANDIDATES[rtspIndex]))
+            .createMediaSource(MediaItem.fromUri("rtsp://$CAMERA_IP:554/"))
         player.setMediaSource(source)
         player.prepare()
         player.playWhenReady = true
+        binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
     }
 
     private fun stopCamera() {
@@ -269,7 +246,7 @@ class MainActivity : AppCompatActivity() {
         exoPlayer?.release()
         exoPlayer = null
         cameraActive = false
-        binding.cameraPreview.visibility = android.view.View.GONE
+        binding.cameraPreview.visibility = View.GONE
         binding.btnCamera.setImageResource(R.drawable.ic_camera_on)
     }
 
