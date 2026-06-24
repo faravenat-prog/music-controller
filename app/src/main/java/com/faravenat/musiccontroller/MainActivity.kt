@@ -255,8 +255,9 @@ class MainActivity : AppCompatActivity() {
                 tryRtspUrl()
             }
         })
+        val forceTcp = rtspIndex > 0
         val source = RtspMediaSource.Factory()
-            .setForceUseRtpTcp(true)
+            .setForceUseRtpTcp(forceTcp)
             .createMediaSource(MediaItem.fromUri(RTSP_CANDIDATES[rtspIndex]))
         player.setMediaSource(source)
         player.prepare()
