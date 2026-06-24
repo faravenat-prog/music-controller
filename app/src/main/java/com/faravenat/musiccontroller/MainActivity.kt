@@ -67,7 +67,7 @@ class MainActivity : AppCompatActivity() {
     private var cameraActive = false
 
     companion object {
-        private const val RTSP_URL = "rtsp://admin:admin@10.165.35.30:554/stream"
+        private const val RTSP_URL = "rtsp://10.165.35.30:554/stream"
     }
 
     // GPS
