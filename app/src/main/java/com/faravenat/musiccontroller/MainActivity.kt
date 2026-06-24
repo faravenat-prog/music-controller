@@ -220,21 +220,21 @@ class MainActivity : AppCompatActivity() {
     private suspend fun scanAndConnect() {
         val ports = listOf(554, 8554, 80, 8080, 8000, 1935, 9000, 443)
         withContext(Dispatchers.Main) {
-            Toast.makeText(this@MainActivity, "Escaneando cámara...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, "Escaneando $CAMERA_IP...", Toast.LENGTH_SHORT).show()
         }
-        val open = ports.map { port ->
-            kotlinx.coroutines.coroutineScope {
+        val open = kotlinx.coroutines.coroutineScope {
+            ports.map { port ->
                 async(Dispatchers.IO) {
                     try {
-                        Socket().use { it.connect(InetSocketAddress(CAMERA_IP, port), 1500); port }
+                        Socket().use { it.connect(InetSocketAddress(CAMERA_IP, port), 2000); port }
                     } catch (e: Exception) { null }
                 }
-            }
-        }.awaitAll().filterNotNull()
+            }.awaitAll().filterNotNull()
+        }
 
         withContext(Dispatchers.Main) {
             if (open.isEmpty()) {
-                Toast.makeText(this@MainActivity, "Cámara no responde en ningún puerto", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, "Sin respuesta en $CAMERA_IP — ¿cambió la IP?", Toast.LENGTH_LONG).show()
             } else {
                 Toast.makeText(this@MainActivity, "Puertos abiertos: ${open.joinToString()}", Toast.LENGTH_LONG).show()
                 when {
