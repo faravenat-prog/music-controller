@@ -5,8 +5,10 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
+import java.nio.ByteBuffer
 
 class PpppClient(
     private val onFrame: (ByteArray) -> Unit,
@@ -39,10 +41,12 @@ class PpppClient(
                     socket = it
                 }
 
-                withContext(Dispatchers.Main) { onStatus("Buscando cámara...") }
+                val broadcasts = probeTargets()
+                withContext(Dispatchers.Main) {
+                    onStatus("Buscando en ${broadcasts.size} destinos...")
+                }
 
                 // Discovery con reintentos: enviar probe cada 2s hasta 10s
-                val broadcasts = probeTargets()
                 var peerAddr: InetAddress? = null
                 var peerPort = 0
                 val punchBuf = ByteArray(2048)
@@ -115,35 +119,42 @@ class PpppClient(
         }
     }
 
-    // Todos los destinos a probar: clientes ARP reales + broadcasts comunes
+    // Todos los destinos a probar: clientes ARP + broadcast calculado por interfaz
     private fun probeTargets(): List<InetAddress> {
         val seen = LinkedHashSet<String>()
 
-        // 1. Clientes conectados al hotspot (tabla ARP del kernel — más confiable)
+        // 1. Tabla ARP — todos los dispositivos vistos recientemente (sin filtrar por flag)
         runCatching {
             File("/proc/net/arp").readLines().drop(1).forEach { line ->
                 val parts = line.trim().split("\\s+".toRegex())
-                // Flags 0x2 = NUD_REACHABLE (dispositivo activo)
-                if (parts.size >= 4 && parts[2] == "0x2") seen.add(parts[0])
+                if (parts.size >= 2) seen.add(parts[0])
             }
         }
 
-        // 2. Broadcast por interfaz de red real
+        // 2. Broadcast calculado manualmente desde IP + prefijo de cada interfaz
+        // (más confiable que interfaceAddress.broadcast en hotspot Samsung)
         runCatching {
             NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
                 if (!iface.isLoopback && iface.isUp) {
                     iface.interfaceAddresses.forEach { ia ->
-                        ia.broadcast?.hostAddress?.let { seen.add(it) }
+                        val ip = ia.address
+                        if (ip is Inet4Address) {
+                            val prefix = ia.networkPrefixLength.toInt()
+                            val ipInt = ByteBuffer.wrap(ip.address).int
+                            val mask = if (prefix == 0) 0 else (-1 shl (32 - prefix))
+                            val broadcast = ipInt or mask.inv()
+                            val bytes = ByteBuffer.allocate(4).putInt(broadcast).array()
+                            InetAddress.getByAddress(bytes).hostAddress?.let { seen.add(it) }
+                        }
                     }
                 }
             }
         }
 
-        // 3. Subredes de hotspot más comunes en Android
+        // 3. Fallback con subredes comunes de hotspot Android
         seen += listOf(
             "192.168.43.255", "192.168.49.255",
-            "172.20.10.255",  "10.0.0.255",
-            "255.255.255.255"
+            "172.20.10.255",  "255.255.255.255"
         )
         return seen.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
     }
