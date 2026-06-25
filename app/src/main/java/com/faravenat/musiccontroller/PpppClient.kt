@@ -196,6 +196,7 @@ class PpppClient(
     private var jpegState = 0      // 0=buscando_SOI, 1=got_FF, 2=en_JPEG, 3=got_FF_en_JPEG
     private val jpegBuf = ByteArrayOutputStream(131072)
     private var frameCount = 0
+    private var videoCipherPrev = 0  // estado XOR continuo entre paquetes de video
 
     // Retorna true si recibió un paquete DRW con datos de video
     private fun handlePacket(
@@ -220,7 +221,9 @@ class PpppClient(
                 val dataLen = payloadSize - 4
                 // Aceptar canal 0 y canal 1 — algunas cámaras usan canal 0 para video
                 if (dataLen > 0 && 8 + dataLen <= len && (channel == 0 || channel == 1)) {
-                    feedVideoBytes(buf, 8, dataLen)
+                    val (dec, newPrev) = PpppCipher.decodeBlock(buf, 8, dataLen, videoCipherPrev)
+                    videoCipherPrev = newPrev
+                    feedVideoBytes(dec, 0, dec.size)
                     return true
                 }
                 return false

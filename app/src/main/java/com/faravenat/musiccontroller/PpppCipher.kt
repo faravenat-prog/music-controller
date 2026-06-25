@@ -45,4 +45,17 @@ object PpppCipher {
         }
         return out
     }
+
+    // Decode manteniendo estado entre paquetes: devuelve (datos_descifrados, nuevo_prev)
+    fun decodeBlock(buf: ByteArray, start: Int, length: Int, prevIn: Int): Pair<ByteArray, Int> {
+        var prev = prevIn
+        val out = ByteArray(length)
+        for (i in 0 until length) {
+            val raw = buf[start + i].toInt() and 0xFF
+            val idx = (KEY[prev and 0x03] + prev) and 0xFF
+            out[i] = (raw xor KEY_TABLE[idx]).toByte()
+            prev = raw
+        }
+        return out to prev
+    }
 }
