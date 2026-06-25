@@ -44,7 +44,9 @@ class PpppClient(
 
                 // 1. Intentar relay cloud primero (más confiable con hotspot)
                 withContext(Dispatchers.Main) { onStatus("Conectando vía relay...") }
-                val relayResult = runCatching { CloudRelay.lookup(CAMERA_UID) }.getOrNull()
+                val relayResult = runCatching {
+                    CloudRelay.lookup(CAMERA_UID, onStatus)
+                }.getOrNull()
 
                 val peer: InetAddress
                 val peerPort: Int
