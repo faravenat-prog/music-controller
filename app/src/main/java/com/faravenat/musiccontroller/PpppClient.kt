@@ -27,8 +27,6 @@ class PpppClient(
         private const val MSG_DRW_ACK   = 0xd1
         private const val MSG_ALIVE     = 0xe0
         private const val MSG_ALIVE_ACK = 0xe1
-        private val FRAME_MAGIC = byteArrayOf(0x55, 0xaa.toByte(), 0x15, 0xa8.toByte(), 0x03, 0x00)
-        private const val FRAME_HEADER_SIZE = 0x20
         private val VIDEO_CMD =
             """{"pro":"stream","cmd":111,"video":1,"user":"admin","pwd":"6666","devmac":"0000"}"""
                 .toByteArray()
@@ -126,15 +124,20 @@ class PpppClient(
 
                 // Loop de recepción de video
                 sock.soTimeout = 3000
-                val videoBuf = ByteArray(8192)
+                val videoBuf = ByteArray(65536)
                 val videoPkt = DatagramPacket(videoBuf, videoBuf.size)
-                val frameData = ByteArrayOutputStream(65536)
+                var drwCount = 0
 
                 while (isActive) {
                     try {
                         videoPkt.setData(videoBuf)
                         sock.receive(videoPkt)
-                        handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort, frameData)
+                        val gotDrw = handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)
+                        if (gotDrw) {
+                            drwCount++
+                            if (drwCount == 1)
+                                withContext(Dispatchers.Main) { onStatus("Datos de cámara recibidos") }
+                        }
                     } catch (_: java.net.SocketTimeoutException) {
                         val alive = byteArrayOf(0xf1.toByte(), MSG_ALIVE.toByte(), 0x00, 0x00)
                         sock.send(DatagramPacket(alive, alive.size, peer, peerPort))
@@ -189,19 +192,24 @@ class PpppClient(
         return seen.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
     }
 
+    // Estado de máquina para extraer JPEGs del stream continuo
+    private var jpegState = 0      // 0=buscando_SOI, 1=got_FF, 2=en_JPEG, 3=got_FF_en_JPEG
+    private val jpegBuf = ByteArrayOutputStream(131072)
+    private var frameCount = 0
+
+    // Retorna true si recibió un paquete DRW con datos de video
     private fun handlePacket(
         buf: ByteArray, len: Int,
         sock: DatagramSocket,
-        peer: InetAddress, port: Int,
-        frameData: ByteArrayOutputStream
-    ) {
-        if (len < 4) return
+        peer: InetAddress, port: Int
+    ): Boolean {
+        if (len < 4) return false
         val msgType = buf[1].toInt() and 0xFF
         val payloadSize = ((buf[2].toInt() and 0xFF) shl 8) or (buf[3].toInt() and 0xFF)
 
         when (msgType) {
             MSG_DRW -> {
-                if (len < 8) return
+                if (len < 8) return false
                 val ack = byteArrayOf(
                     0xf1.toByte(), MSG_DRW_ACK.toByte(), 0x00, 0x04,
                     0xd1.toByte(), buf[5], buf[6], buf[7]
@@ -210,50 +218,51 @@ class PpppClient(
 
                 val channel = buf[5].toInt() and 0xFF
                 val dataLen = payloadSize - 4
-                if (channel == 1 && dataLen > 0 && 8 + dataLen <= len) {
-                    processVideoBytes(buf, 8, dataLen, frameData)
+                // Aceptar canal 0 y canal 1 — algunas cámaras usan canal 0 para video
+                if (dataLen > 0 && 8 + dataLen <= len && (channel == 0 || channel == 1)) {
+                    feedVideoBytes(buf, 8, dataLen)
+                    return true
                 }
+                return false
             }
             MSG_ALIVE -> {
                 val ack = byteArrayOf(0xf1.toByte(), MSG_ALIVE_ACK.toByte(), 0x00, 0x00)
                 sock.send(DatagramPacket(ack, ack.size, peer, port))
             }
         }
+        return false
     }
 
-    private fun processVideoBytes(buf: ByteArray, start: Int, length: Int, frameData: ByteArrayOutputStream) {
-        val end = (start + length).coerceAtMost(buf.size)
-        var i = start
-        while (i < end) {
-            if (i + FRAME_MAGIC.size <= end && matchesMagic(buf, i)) {
-                if (frameData.size() > 0) emitFrame(frameData)
-                i += FRAME_HEADER_SIZE
-            } else {
-                frameData.write(buf[i].toInt())
-                i++
+    // Máquina de estados: detecta FF D8 (SOI) y FF D9 (EOI) para extraer JPEGs completos
+    // No depende de los magic bytes del protocolo PPPP (que pueden perderse entre paquetes)
+    private fun feedVideoBytes(buf: ByteArray, start: Int, length: Int) {
+        val end = minOf(start + length, buf.size)
+        for (i in start until end) {
+            val b = buf[i].toInt() and 0xFF
+            when (jpegState) {
+                0 -> if (b == 0xFF) jpegState = 1
+                1 -> when (b) {
+                    0xD8 -> { jpegBuf.reset(); jpegBuf.write(0xFF); jpegBuf.write(0xD8); jpegState = 2 }
+                    0xFF -> {}            // varios FF seguidos — permanecer en estado 1
+                    else  -> jpegState = 0
+                }
+                2 -> { jpegBuf.write(b); if (b == 0xFF) jpegState = 3 }
+                3 -> {
+                    jpegBuf.write(b)
+                    when (b) {
+                        0xD9 -> {         // EOI — frame completo
+                            frameCount++
+                            if (frameCount == 1) onStatus("Primer frame JPEG recibido")
+                            onFrame(jpegBuf.toByteArray())
+                            jpegBuf.reset()
+                            jpegState = 0
+                        }
+                        0xFF -> {}        // varios FF — permanecer en estado 3
+                        else  -> jpegState = 2
+                    }
+                }
             }
         }
-    }
-
-    private fun matchesMagic(buf: ByteArray, pos: Int): Boolean {
-        for (j in FRAME_MAGIC.indices) {
-            if (buf[pos + j] != FRAME_MAGIC[j]) return false
-        }
-        return true
-    }
-
-    private fun emitFrame(frameData: ByteArrayOutputStream) {
-        val bytes = frameData.toByteArray()
-        frameData.reset()
-        val jpegStart = bytes.indexOfJpegSoi()
-        if (jpegStart >= 0) onFrame(bytes.copyOfRange(jpegStart, bytes.size))
-    }
-
-    private fun ByteArray.indexOfJpegSoi(): Int {
-        for (i in 0 until size - 1) {
-            if (this[i] == 0xFF.toByte() && this[i + 1] == 0xD8.toByte()) return i
-        }
-        return -1
     }
 
     private fun sendCmd(sock: DatagramSocket, peer: InetAddress, port: Int, json: ByteArray) {
