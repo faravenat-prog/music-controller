@@ -77,6 +77,7 @@ class MainActivity : AppCompatActivity() {
 
     // Health Connect
     private var healthClient: HealthConnectClient? = null
+    private var healthPermissionRequested = false
     private val heartRateHandler = Handler(Looper.getMainLooper())
     private val heartRateRunnable = object : Runnable {
         override fun run() {
@@ -166,7 +167,13 @@ class MainActivity : AppCompatActivity() {
     private suspend fun checkHealthPermissions() {
         val granted = healthClient?.permissionController?.getGrantedPermissions() ?: emptySet()
         if (!granted.containsAll(healthPermissions)) {
-            healthPermissionLauncher.launch(healthPermissions)
+            // Pedir permiso solo una vez — evita el loop abre/cierra Health Connect
+            if (!healthPermissionRequested) {
+                healthPermissionRequested = true
+                healthPermissionLauncher.launch(healthPermissions)
+            } else {
+                withContext(Dispatchers.Main) { binding.tvHeartRate.text = "❤️ sin permiso" }
+            }
         } else {
             fetchHeartRate()
         }
@@ -187,8 +194,8 @@ class MainActivity : AppCompatActivity() {
                 binding.tvHeartRate.text = if (bpm != null) "❤️ $bpm bpm" else "❤️ -- bpm"
             }
         } catch (e: SecurityException) {
+            // No volver a pedir permisos aquí — evita el loop infinito
             withContext(Dispatchers.Main) { binding.tvHeartRate.text = "❤️ sin permiso" }
-            lifecycleScope.launch { checkHealthPermissions() }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) { binding.tvHeartRate.text = "❤️ ?? bpm" }
         }

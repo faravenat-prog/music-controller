@@ -2,6 +2,7 @@ package com.faravenat.musiccontroller
 
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -41,7 +42,7 @@ class PpppClient(
                 withContext(Dispatchers.Main) { onStatus("Buscando cámara...") }
 
                 // Discovery con reintentos: enviar probe cada 2s hasta 10s
-                val broadcasts = broadcastAddresses()
+                val broadcasts = probeTargets()
                 var peerAddr: InetAddress? = null
                 var peerPort = 0
                 val punchBuf = ByteArray(2048)
@@ -114,9 +115,20 @@ class PpppClient(
         }
     }
 
-    // Direcciones broadcast a probar: interfaz real + comunes de hotspot Android
-    private fun broadcastAddresses(): List<InetAddress> {
+    // Todos los destinos a probar: clientes ARP reales + broadcasts comunes
+    private fun probeTargets(): List<InetAddress> {
         val seen = LinkedHashSet<String>()
+
+        // 1. Clientes conectados al hotspot (tabla ARP del kernel — más confiable)
+        runCatching {
+            File("/proc/net/arp").readLines().drop(1).forEach { line ->
+                val parts = line.trim().split("\\s+".toRegex())
+                // Flags 0x2 = NUD_REACHABLE (dispositivo activo)
+                if (parts.size >= 4 && parts[2] == "0x2") seen.add(parts[0])
+            }
+        }
+
+        // 2. Broadcast por interfaz de red real
         runCatching {
             NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
                 if (!iface.isLoopback && iface.isUp) {
@@ -126,15 +138,14 @@ class PpppClient(
                 }
             }
         }
-        // Subredes de hotspot más comunes en Android (Samsung, AOSP, etc.)
+
+        // 3. Subredes de hotspot más comunes en Android
         seen += listOf(
-            "192.168.43.255",
-            "192.168.49.255",
-            "10.0.0.255",
-            "172.20.10.255",
+            "192.168.43.255", "192.168.49.255",
+            "172.20.10.255",  "10.0.0.255",
             "255.255.255.255"
         )
-        return seen.map { InetAddress.getByName(it) }
+        return seen.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
     }
 
     private fun handlePacket(
