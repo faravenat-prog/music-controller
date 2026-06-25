@@ -18,6 +18,7 @@ class PpppClient(
     private var job: Job? = null
 
     companion object {
+        const val CAMERA_UID = "batg529474bormc"
         private val PROBE = byteArrayOf(0x2c, 0xba.toByte(), 0x5f, 0x5d)
         private const val DISCOVERY_PORT = 32108
         private const val MSG_PUNCH     = 0x41
@@ -41,58 +42,69 @@ class PpppClient(
                     socket = it
                 }
 
-                val broadcasts = probeTargets()
-                withContext(Dispatchers.Main) {
-                    onStatus("Buscando en ${broadcasts.size} destinos...")
-                }
+                // 1. Intentar relay cloud primero (más confiable con hotspot)
+                withContext(Dispatchers.Main) { onStatus("Conectando vía relay...") }
+                val relayResult = runCatching { CloudRelay.lookup(CAMERA_UID) }.getOrNull()
 
-                // Discovery con reintentos: enviar probe cada 2s hasta 10s
-                var peerAddr: InetAddress? = null
-                var peerPort = 0
-                val punchBuf = ByteArray(2048)
-                val punchPkt = DatagramPacket(punchBuf, punchBuf.size)
-                val deadline = System.currentTimeMillis() + 10_000
+                val peer: InetAddress
+                val peerPort: Int
 
-                sock.soTimeout = 2000
-                while (peerAddr == null && System.currentTimeMillis() < deadline && isActive) {
-                    broadcasts.forEach { addr ->
-                        runCatching { sock.send(DatagramPacket(PROBE, PROBE.size, addr, DISCOVERY_PORT)) }
-                    }
-                    try {
-                        punchPkt.setData(punchBuf)
-                        sock.receive(punchPkt)
-                        if ((punchBuf[1].toInt() and 0xFF) == MSG_PUNCH) {
-                            peerAddr = punchPkt.address
-                            peerPort = punchPkt.port
+                if (relayResult != null) {
+                    peer = relayResult.first
+                    peerPort = relayResult.second
+                    withContext(Dispatchers.Main) { onStatus("Relay: ${peer.hostAddress}:$peerPort") }
+                    // Enviar probe directamente al puerto dado por el relay
+                    sock.send(DatagramPacket(PROBE, PROBE.size, peer, peerPort))
+                } else {
+                    // 2. Fallback: discovery local por broadcast y ARP
+                    withContext(Dispatchers.Main) { onStatus("Buscando en red local...") }
+                    val broadcasts = probeTargets()
+                    val punchBuf = ByteArray(2048)
+                    val punchPkt = DatagramPacket(punchBuf, punchBuf.size)
+                    val deadline = System.currentTimeMillis() + 10_000
+                    var foundAddr: InetAddress? = null
+                    var foundPort = 0
+
+                    sock.soTimeout = 2000
+                    while (foundAddr == null && System.currentTimeMillis() < deadline && isActive) {
+                        broadcasts.forEach { addr ->
+                            runCatching { sock.send(DatagramPacket(PROBE, PROBE.size, addr, DISCOVERY_PORT)) }
                         }
-                    } catch (_: java.net.SocketTimeoutException) { /* reintento */ }
-                }
+                        try {
+                            punchPkt.setData(punchBuf)
+                            sock.receive(punchPkt)
+                            if ((punchBuf[1].toInt() and 0xFF) == MSG_PUNCH) {
+                                foundAddr = punchPkt.address
+                                foundPort = punchPkt.port
+                            }
+                        } catch (_: java.net.SocketTimeoutException) { }
+                    }
 
-                if (peerAddr == null) {
-                    withContext(Dispatchers.Main) { onStatus("Cámara no encontrada") }
-                    return@launch
-                }
+                    if (foundAddr == null) {
+                        withContext(Dispatchers.Main) { onStatus("Cámara no encontrada") }
+                        return@launch
+                    }
 
-                // Echo del PUNCH (hasta 5 veces)
-                val punchData = punchBuf.copyOf(punchPkt.length)
-                repeat(5) {
-                    sock.send(DatagramPacket(punchData, punchData.size, peerAddr, peerPort))
-                }
-
-                // Esperar MSG_P2P_RDY
-                sock.soTimeout = 5000
-                val rdyBuf = ByteArray(256)
-                val rdyPkt = DatagramPacket(rdyBuf, rdyBuf.size)
-                sock.receive(rdyPkt)
-
-                if ((rdyBuf[1].toInt() and 0xFF) != MSG_P2P_RDY) {
-                    withContext(Dispatchers.Main) { onStatus("Cámara no respondió P2P") }
-                    return@launch
+                    // Handshake PUNCH completo
+                    val punchData = punchBuf.copyOf(punchPkt.length)
+                    repeat(5) {
+                        sock.send(DatagramPacket(punchData, punchData.size, foundAddr, foundPort))
+                    }
+                    sock.soTimeout = 5000
+                    val rdyBuf = ByteArray(256)
+                    val rdyPkt = DatagramPacket(rdyBuf, rdyBuf.size)
+                    sock.receive(rdyPkt)
+                    if ((rdyBuf[1].toInt() and 0xFF) != MSG_P2P_RDY) {
+                        withContext(Dispatchers.Main) { onStatus("Cámara no respondió P2P") }
+                        return@launch
+                    }
+                    peer = foundAddr
+                    peerPort = foundPort
                 }
 
                 // Pedir stream de video
-                sendCmd(sock, peerAddr, peerPort, VIDEO_CMD)
-                withContext(Dispatchers.Main) { onStatus("Conectado — ${peerAddr.hostAddress}") }
+                sendCmd(sock, peer, peerPort, VIDEO_CMD)
+                withContext(Dispatchers.Main) { onStatus("Conectado — ${peer.hostAddress}") }
 
                 // Loop de recepción de video
                 sock.soTimeout = 3000
@@ -104,10 +116,10 @@ class PpppClient(
                     try {
                         videoPkt.setData(videoBuf)
                         sock.receive(videoPkt)
-                        handlePacket(videoBuf, videoPkt.length, sock, peerAddr, peerPort, frameData)
+                        handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort, frameData)
                     } catch (_: java.net.SocketTimeoutException) {
                         val alive = byteArrayOf(0xf1.toByte(), MSG_ALIVE.toByte(), 0x00, 0x00)
-                        sock.send(DatagramPacket(alive, alive.size, peerAddr, peerPort))
+                        sock.send(DatagramPacket(alive, alive.size, peer, peerPort))
                     }
                 }
 
