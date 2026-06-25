@@ -193,10 +193,10 @@ class PpppClient(
     }
 
     // Estado de máquina para extraer JPEGs del stream continuo
+    // El video de la cámara A9 no está cifrado XOR — llega en JPEG crudo
     private var jpegState = 0      // 0=buscando_SOI, 1=got_FF, 2=en_JPEG, 3=got_FF_en_JPEG
     private val jpegBuf = ByteArrayOutputStream(131072)
     private var frameCount = 0
-    private var videoCipherPrev = 0  // estado XOR continuo entre paquetes de video
 
     // Retorna true si recibió un paquete DRW con datos de video
     private fun handlePacket(
@@ -219,11 +219,8 @@ class PpppClient(
 
                 val channel = buf[5].toInt() and 0xFF
                 val dataLen = payloadSize - 4
-                // Aceptar canal 0 y canal 1 — algunas cámaras usan canal 0 para video
                 if (dataLen > 0 && 8 + dataLen <= len && (channel == 0 || channel == 1)) {
-                    val (dec, newPrev) = PpppCipher.decodeBlock(buf, 8, dataLen, videoCipherPrev)
-                    videoCipherPrev = newPrev
-                    feedVideoBytes(dec, 0, dec.size)
+                    feedVideoBytes(buf, 8, dataLen)
                     return true
                 }
                 return false
@@ -236,8 +233,9 @@ class PpppClient(
         return false
     }
 
-    // Máquina de estados: detecta FF D8 (SOI) y FF D9 (EOI) para extraer JPEGs completos
-    // No depende de los magic bytes del protocolo PPPP (que pueden perderse entre paquetes)
+    // Máquina de estados que detecta FF D8 (SOI) y FF D9 (EOI).
+    // Si llega un nuevo FF D8 mientras se acumula un frame, emite el frame actual
+    // sin esperar FF D9 — cubre cámaras que omiten el EOI entre frames.
     private fun feedVideoBytes(buf: ByteArray, start: Int, length: Int) {
         val end = minOf(start + length, buf.size)
         for (i in start until end) {
@@ -246,26 +244,35 @@ class PpppClient(
                 0 -> if (b == 0xFF) jpegState = 1
                 1 -> when (b) {
                     0xD8 -> { jpegBuf.reset(); jpegBuf.write(0xFF); jpegBuf.write(0xD8); jpegState = 2 }
-                    0xFF -> {}            // varios FF seguidos — permanecer en estado 1
+                    0xFF -> {}
                     else  -> jpegState = 0
                 }
                 2 -> { jpegBuf.write(b); if (b == 0xFF) jpegState = 3 }
-                3 -> {
-                    jpegBuf.write(b)
-                    when (b) {
-                        0xD9 -> {         // EOI — frame completo
-                            frameCount++
-                            if (frameCount == 1) onStatus("Primer frame JPEG recibido")
-                            onFrame(jpegBuf.toByteArray())
-                            jpegBuf.reset()
-                            jpegState = 0
-                        }
-                        0xFF -> {}        // varios FF — permanecer en estado 3
-                        else  -> jpegState = 2
+                3 -> when (b) {
+                    0xD9 -> {  // EOI: frame completo con marcador de fin
+                        jpegBuf.write(b)
+                        tryEmitFrame(jpegBuf.toByteArray())
+                        jpegBuf.reset(); jpegState = 0
                     }
+                    0xD8 -> {  // Nuevo SOI sin EOI previo: emitir frame actual y empezar nuevo
+                        val frameBytes = jpegBuf.toByteArray()
+                        jpegBuf.reset()
+                        // El último byte en frameBytes es 0xFF del SOI entrante — no lo incluimos
+                        if (frameBytes.size > 1) tryEmitFrame(frameBytes.copyOfRange(0, frameBytes.size - 1))
+                        jpegBuf.write(0xFF); jpegBuf.write(0xD8); jpegState = 2
+                    }
+                    0xFF -> jpegBuf.write(b)   // varios FF — permanecer en estado 3
+                    else  -> { jpegBuf.write(b); jpegState = 2 }
                 }
             }
         }
+    }
+
+    private fun tryEmitFrame(bytes: ByteArray) {
+        if (bytes.size < 200) return   // descartar fragmentos trivialmente pequeños
+        frameCount++
+        if (frameCount == 1) onStatus("Frame recibido: ${bytes.size} bytes")
+        onFrame(bytes)
     }
 
     private fun sendCmd(sock: DatagramSocket, peer: InetAddress, port: Int, json: ByteArray) {
