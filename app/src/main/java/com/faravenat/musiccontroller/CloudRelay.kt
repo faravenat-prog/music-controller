@@ -42,14 +42,17 @@ object CloudRelay {
         return pkt
     }
 
-    // Retorna (cameraIP, cameraPort) o null si no la encuentra
-    fun lookup(uid: String, onStatus: ((String) -> Unit)? = null): Pair<InetAddress, Int>? {
-        val sock = DatagramSocket(0).also { it.soTimeout = 3000 }
-        val localPort = sock.localPort
+    // Usa el mismo socket que usará PpppClient para el video — el relay aprende
+    // nuestro puerto real, y la cámara puede conectarse de vuelta al socket correcto.
+    fun lookup(
+        uid: String,
+        videoSock: DatagramSocket,
+        onStatus: ((String) -> Unit)? = null
+    ): Pair<InetAddress, Int>? {
+        val localPort = videoSock.localPort
 
         val uidBytes = uidToBytes(uid)
         val portBytes = byteArrayOf((localPort shr 8).toByte(), (localPort and 0xFF).toByte())
-        // Payload: UID(20) + 0x00 0x00 + localPort(2) + padding(12) = 36 bytes
         val lookupPayload = uidBytes + byteArrayOf(0x00, 0x00) + portBytes + ByteArray(12)
 
         val stunPkt   = buildPacket(0xF1.toByte(), 0x00)
@@ -58,58 +61,57 @@ object CloudRelay {
         val buf = ByteArray(256)
         val pkt = DatagramPacket(buf, buf.size)
 
+        val prevTimeout = videoSock.soTimeout
+
         try {
             for ((serverIp, serverPort) in RELAY_SERVERS) {
                 val serverAddr = InetAddress.getByName(serverIp)
-                Log.d(TAG, "Probando relay $serverIp:$serverPort")
+                Log.d(TAG, "Probando relay $serverIp:$serverPort (localPort=$localPort)")
                 onStatus?.invoke("Relay $serverIp...")
 
-                // 1. STUN — enviar y esperar respuesta (pero no exigirla)
-                sock.send(DatagramPacket(stunPkt, stunPkt.size, serverAddr, serverPort))
-                sock.soTimeout = 3000
-                var stunOk = false
+                // STUN — enviar y esperar respuesta (pero continuar aunque no llegue)
+                videoSock.send(DatagramPacket(stunPkt, stunPkt.size, serverAddr, serverPort))
+                videoSock.soTimeout = 3000
                 try {
-                    pkt.setData(buf); sock.receive(pkt)
+                    pkt.setData(buf); videoSock.receive(pkt)
                     val t = buf[1].toInt() and 0xFF
-                    Log.d(TAG, "STUN resp de $serverIp: [${buf[0].toUInt()}][0x${t.toString(16)}] len=${pkt.length}")
-                    stunOk = true
+                    Log.d(TAG, "STUN resp de $serverIp: type=0x${t.toString(16)} len=${pkt.length}")
                 } catch (_: java.net.SocketTimeoutException) {
                     Log.d(TAG, "STUN timeout en $serverIp — enviando LOOKUP igual")
                 }
 
-                // 2. LOOKUP — enviar siempre, haya o no respuesta al STUN
-                sock.send(DatagramPacket(lookupPkt, lookupPkt.size, serverAddr, serverPort))
-                Log.d(TAG, "LOOKUP enviado a $serverIp (stunOk=$stunOk)")
+                // LOOKUP — enviar siempre
+                videoSock.send(DatagramPacket(lookupPkt, lookupPkt.size, serverAddr, serverPort))
+                Log.d(TAG, "LOOKUP enviado a $serverIp")
 
-                // 3. Esperar hasta 5 paquetes de respuesta
-                sock.soTimeout = 5000
+                // Esperar respuesta con IP:puerto de la cámara
+                videoSock.soTimeout = 5000
                 repeat(5) {
                     try {
-                        pkt.setData(buf); sock.receive(pkt)
+                        pkt.setData(buf); videoSock.receive(pkt)
                         val type = buf[1].toInt() and 0xFF
                         val payloadLen = ((buf[2].toInt() and 0xFF) shl 8) or (buf[3].toInt() and 0xFF)
                         Log.d(TAG, "Resp de $serverIp: type=0x${type.toString(16)} payloadLen=$payloadLen len=${pkt.length}")
 
-                        // Aceptar cualquier respuesta F1 que tenga al menos 6 bytes de payload
                         if (buf[0] == 0xF1.toByte() && payloadLen >= 6 && pkt.length >= 10) {
                             val ip   = InetAddress.getByAddress(buf.copyOfRange(4, 8))
                             val port = ((buf[8].toInt() and 0xFF) shl 8) or (buf[9].toInt() and 0xFF)
                             Log.d(TAG, "Posible cámara: ${ip.hostAddress}:$port")
                             if (port > 0 && !ip.isLoopbackAddress) {
-                                Log.d(TAG, "¡Cámara encontrada via relay! ${ip.hostAddress}:$port")
+                                Log.d(TAG, "¡Cámara encontrada! ${ip.hostAddress}:$port")
                                 return ip to port
                             }
                         }
                     } catch (_: java.net.SocketTimeoutException) {
-                        Log.d(TAG, "Timeout esperando resp LOOKUP de $serverIp")
+                        Log.d(TAG, "Timeout resp LOOKUP de $serverIp")
                     }
                 }
             }
         } finally {
-            runCatching { sock.close() }
+            videoSock.soTimeout = prevTimeout
         }
 
-        Log.d(TAG, "Relay: cámara no encontrada en ningún servidor")
+        Log.d(TAG, "Relay: no encontrada en ningún servidor")
         return null
     }
 }

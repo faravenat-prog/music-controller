@@ -45,7 +45,7 @@ class PpppClient(
                 // 1. Intentar relay cloud primero (más confiable con hotspot)
                 withContext(Dispatchers.Main) { onStatus("Conectando vía relay...") }
                 val relayResult = runCatching {
-                    CloudRelay.lookup(CAMERA_UID, onStatus)
+                    CloudRelay.lookup(CAMERA_UID, sock, onStatus)
                 }.getOrNull()
 
                 val peer: InetAddress
@@ -54,9 +54,25 @@ class PpppClient(
                 if (relayResult != null) {
                     peer = relayResult.first
                     peerPort = relayResult.second
-                    withContext(Dispatchers.Main) { onStatus("Relay: ${peer.hostAddress}:$peerPort") }
-                    // Enviar probe directamente al puerto dado por el relay
+                    withContext(Dispatchers.Main) { onStatus("Relay OK: ${peer.hostAddress}:$peerPort") }
+
+                    // Handshake igual que discovery local: PROBE → esperar PUNCH → echo → P2P_RDY
+                    val punchBuf = ByteArray(2048)
+                    val punchPkt = DatagramPacket(punchBuf, punchBuf.size)
+                    sock.soTimeout = 5000
                     sock.send(DatagramPacket(PROBE, PROBE.size, peer, peerPort))
+                    try {
+                        punchPkt.setData(punchBuf)
+                        sock.receive(punchPkt)
+                        if ((punchBuf[1].toInt() and 0xFF) == MSG_PUNCH) {
+                            val echo = punchBuf.copyOf(punchPkt.length)
+                            repeat(5) { sock.send(DatagramPacket(echo, echo.size, peer, peerPort)) }
+                            punchPkt.setData(punchBuf)
+                            sock.receive(punchPkt)  // esperar P2P_RDY (ignoramos si no llega)
+                        }
+                    } catch (_: java.net.SocketTimeoutException) {
+                        // La cámara puede no enviar PUNCH vía relay — continuar igual
+                    }
                 } else {
                     // 2. Fallback: discovery local por broadcast y ARP
                     withContext(Dispatchers.Main) { onStatus("Buscando en red local...") }
