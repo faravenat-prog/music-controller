@@ -211,6 +211,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startCamera() {
         val client = PpppClient(
+            dumpDir = getExternalFilesDir(null),
             onFrame = { jpegBytes ->
                 val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return@PpppClient
                 runOnUiThread {

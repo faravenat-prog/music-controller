@@ -12,10 +12,12 @@ import java.nio.ByteBuffer
 
 class PpppClient(
     private val onFrame: (ByteArray) -> Unit,
-    private val onStatus: (String) -> Unit
+    private val onStatus: (String) -> Unit,
+    private val dumpDir: java.io.File? = null
 ) {
     private var socket: DatagramSocket? = null
     private var job: Job? = null
+    private var rawDumpDone = false
 
     companion object {
         const val CAMERA_UID = "batg529474bormc"
@@ -220,6 +222,15 @@ class PpppClient(
                 val channel = buf[5].toInt() and 0xFF
                 val dataLen = payloadSize - 4
                 if (dataLen > 0 && 8 + dataLen <= len && (channel == 0 || channel == 1)) {
+                    if (!rawDumpDone && dumpDir != null) {
+                        rawDumpDone = true
+                        val dumpLen = minOf(dataLen, 256)
+                        val hex = buf.slice(8 until 8 + dumpLen)
+                            .joinToString(" ") { "%02X".format(it) }
+                        val file = java.io.File(dumpDir, "camera_dump.txt")
+                        file.writeText("ch=$channel dataLen=$dataLen\n$hex\n")
+                        onStatus("Dump guardado: camera_dump.txt (ch$channel ${dataLen}b)")
+                    }
                     feedVideoBytes(buf, 8, dataLen)
                     return true
                 }
