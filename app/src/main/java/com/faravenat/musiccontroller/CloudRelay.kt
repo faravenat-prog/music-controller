@@ -3,7 +3,9 @@ package com.faravenat.musiccontroller
 import android.util.Log
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.NetworkInterface
 
 object CloudRelay {
     private const val TAG = "CloudRelay"
@@ -51,9 +53,12 @@ object CloudRelay {
     ): Pair<InetAddress, Int>? {
         val localPort = videoSock.localPort
 
-        val uidBytes = uidToBytes(uid)
+        val uidBytes  = uidToBytes(uid)
         val portBytes = byteArrayOf((localPort shr 8).toByte(), (localPort and 0xFF).toByte())
-        val lookupPayload = uidBytes + byteArrayOf(0x00, 0x00) + portBytes + ByteArray(12)
+        val lanIp     = getLanIp()  // 4 bytes — el relay se lo pasa a la cámara para que sepa dónde conectarse
+        // Formato correcto 52 bytes (confirmado por PCAP de YsxLite):
+        // header(4) + UID(20) + LAN_IP(4) + WAN_IP(4) + LAN_port(2) + WAN_port(2) + zeros(16)
+        val lookupPayload = uidBytes + lanIp + ByteArray(4) + portBytes + portBytes + ByteArray(16)
 
         val stunPkt   = buildPacket(0xF1.toByte(), 0x00)
         val lookupPkt = buildPacket(0xF1.toByte(), 0x20, lookupPayload)
@@ -113,5 +118,15 @@ object CloudRelay {
 
         Log.d(TAG, "Relay: no encontrada en ningún servidor")
         return null
+    }
+
+    private fun getLanIp(): ByteArray {
+        return try {
+            NetworkInterface.getNetworkInterfaces()?.toList()
+                ?.filter { !it.isLoopback && it.isUp }
+                ?.flatMap { it.interfaceAddresses }
+                ?.firstOrNull { it.address is Inet4Address && !it.address.isLoopbackAddress }
+                ?.address?.address ?: ByteArray(4)
+        } catch (e: Exception) { ByteArray(4) }
     }
 }

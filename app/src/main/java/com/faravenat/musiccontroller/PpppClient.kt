@@ -143,7 +143,14 @@ class PpppClient(
                         // Ignorar paquetes que no vienen de la cámara (sobras del relay)
                         if (videoPkt.address != peer) continue
 
-                        if (handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)) {
+                        val pktType = if (videoPkt.length >= 2) videoBuf[1].toInt() and 0xFF else -1
+                        if (!videoStarted && pktType == MSG_PUNCH) {
+                            // Cámara inició PUNCH después de que el relay le avisó — eco + VIDEO_CMD
+                            val echo = videoBuf.copyOf(videoPkt.length)
+                            repeat(3) { sock.send(DatagramPacket(echo, echo.size, peer, peerPort)) }
+                            sendCmd(sock, peer, peerPort, VIDEO_CMD)
+                            sendCmdRaw(sock, peer, peerPort, VIDEO_CMD)
+                        } else if (handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)) {
                             videoStarted = true
                         }
                     } catch (_: java.net.SocketTimeoutException) {
