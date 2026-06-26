@@ -31,6 +31,7 @@ import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
 import android.graphics.BitmapFactory
 import android.view.View
+import android.widget.EditText
 import android.widget.Toast
 import com.faravenat.musiccontroller.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
@@ -61,12 +62,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Cámara IP Webcam (celular viejo por hotspot)
+    // Cámara IP Webcam (celular viejo vía hotspot)
     private var ipWebcamClient: IpWebcamClient? = null
     private var cameraActive = false
-    companion object {
-        const val IPWEBCAM_URL = "http://192.168.43.100:8080/video"
-    }
+    private val prefs by lazy { getSharedPreferences("musicbici", MODE_PRIVATE) }
 
 
     // GPS
@@ -208,13 +207,42 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupCameraButton() {
         binding.btnCamera.setOnClickListener {
-            if (ipWebcamClient != null) stopCamera() else startCamera()
+            if (ipWebcamClient != null) {
+                stopCamera()
+            } else {
+                val savedIp = prefs.getString("camera_ip", null)
+                if (savedIp != null) startCamera(savedIp) else showIpDialog()
+            }
+        }
+        binding.btnCamera.setOnLongClickListener {
+            showIpDialog()
+            true
         }
     }
 
-    private fun startCamera() {
+    private fun showIpDialog() {
+        val input = EditText(this).apply {
+            hint = "10.x.x.x"
+            setText(prefs.getString("camera_ip", ""))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("IP del celular con cámara")
+            .setMessage("Ingresa la IP que muestra IP Webcam")
+            .setView(input)
+            .setPositiveButton("Conectar") { _, _ ->
+                val ip = input.text.toString().trim()
+                if (ip.isNotEmpty()) {
+                    prefs.edit().putString("camera_ip", ip).apply()
+                    startCamera(ip)
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun startCamera(ip: String) {
         val client = IpWebcamClient(
-            streamUrl = IPWEBCAM_URL,
+            streamUrl = "http://$ip:8080/video",
             onFrame = { jpegBytes ->
                 val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return@IpWebcamClient
                 runOnUiThread {
