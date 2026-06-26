@@ -121,6 +121,8 @@ class PpppClient(
                         sock.receive(videoPkt)
                         pktCount++
 
+                        val srcIp = videoPkt.address?.hostAddress ?: "?"
+
                         // Dump del primer paquete recibido (cualquier tipo)
                         if (pktCount == 1) {
                             val plen = videoPkt.length
@@ -130,25 +132,19 @@ class PpppClient(
                             if (dumpDir != null) {
                                 runCatching {
                                     java.io.File(dumpDir, "camera_dump.txt")
-                                        .writeText("tipo=$tipo len=$plen\n$hex\n")
+                                        .writeText("tipo=$tipo len=$plen src=$srcIp\n$hex\n")
                                 }
                             }
                             withContext(Dispatchers.Main) {
-                                onStatus("Pkt#1 tipo=$tipo len=$plen")
+                                onStatus("Pkt#1 tipo=$tipo src=$srcIp")
                             }
                         }
 
-                        val pktType = if (videoPkt.length >= 2) videoBuf[1].toInt() and 0xFF else -1
-                        if (pktType == 0x21) {
-                            // Handshake relay: cámara envía 0x21 al conectar vía relay.
-                            // Hacemos eco del paquete de vuelta y reenviamos VIDEO_CMD.
-                            sock.send(DatagramPacket(videoBuf.copyOf(videoPkt.length), videoPkt.length, peer, peerPort))
-                            sendCmd(sock, peer, peerPort, VIDEO_CMD)
-                            sendCmdRaw(sock, peer, peerPort, VIDEO_CMD)
-                        } else {
-                            if (handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)) {
-                                videoStarted = true
-                            }
+                        // Ignorar paquetes que no vienen de la cámara (sobras del relay)
+                        if (videoPkt.address != peer) continue
+
+                        if (handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)) {
+                            videoStarted = true
                         }
                     } catch (_: java.net.SocketTimeoutException) {
                         if (!videoStarted) {
