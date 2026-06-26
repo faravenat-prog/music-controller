@@ -113,6 +113,7 @@ class PpppClient(
                 val videoBuf = ByteArray(65536)
                 val videoPkt = DatagramPacket(videoBuf, videoBuf.size)
                 var pktCount = 0
+                var videoStarted = false
 
                 while (isActive) {
                     try {
@@ -137,10 +138,21 @@ class PpppClient(
                             }
                         }
 
-                        handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)
+                        val pktType = if (videoPkt.length >= 2) videoBuf[1].toInt() and 0xFF else -1
+                        if (pktType == 0x21) {
+                            // Handshake relay: cámara envía 0x21 al conectar vía relay.
+                            // Hacemos eco del paquete de vuelta y reenviamos VIDEO_CMD.
+                            sock.send(DatagramPacket(videoBuf.copyOf(videoPkt.length), videoPkt.length, peer, peerPort))
+                            sendCmd(sock, peer, peerPort, VIDEO_CMD)
+                            sendCmdRaw(sock, peer, peerPort, VIDEO_CMD)
+                        } else {
+                            if (handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)) {
+                                videoStarted = true
+                            }
+                        }
                     } catch (_: java.net.SocketTimeoutException) {
-                        if (pktCount == 0) {
-                            // Reintentar ambas versiones del comando
+                        if (!videoStarted) {
+                            // Sin video aún — reintentar comando (cubre pktCount==0 y caso 0x21)
                             sendCmd(sock, peer, peerPort, VIDEO_CMD)
                             sendCmdRaw(sock, peer, peerPort, VIDEO_CMD)
                             withContext(Dispatchers.Main) { onStatus("Reintentando...") }
