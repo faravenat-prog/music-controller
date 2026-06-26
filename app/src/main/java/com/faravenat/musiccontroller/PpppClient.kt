@@ -55,7 +55,9 @@ class PpppClient(
                     peer = relayResult.first
                     peerPort = relayResult.second
                     withContext(Dispatchers.Main) { onStatus("Relay OK: ${peer.hostAddress}:$peerPort") }
-                    // Via relay la cámara ya está lista — no se necesita PROBE/PUNCH
+                    // Cámara en hotspot = directo reachable. PROBE unicast activa handshake local
+                    // independientemente de si el relay logra el NAT traversal.
+                    repeat(3) { runCatching { sock.send(DatagramPacket(PROBE, PROBE.size, peer, DISCOVERY_PORT)) } }
                 } else {
                     // 2. Fallback: discovery local por broadcast y ARP
                     withContext(Dispatchers.Main) { onStatus("Buscando en red local...") }
@@ -145,9 +147,11 @@ class PpppClient(
 
                         val pktType = if (videoPkt.length >= 2) videoBuf[1].toInt() and 0xFF else -1
                         if (!videoStarted && pktType == MSG_PUNCH) {
-                            // Cámara inició PUNCH después de que el relay le avisó — eco + VIDEO_CMD
+                            // Cámara respondió al PROBE — eco al puerto real del que llegó + VIDEO_CMD
+                            val srcPort = videoPkt.port
                             val echo = videoBuf.copyOf(videoPkt.length)
-                            repeat(3) { sock.send(DatagramPacket(echo, echo.size, peer, peerPort)) }
+                            repeat(3) { sock.send(DatagramPacket(echo, echo.size, peer, srcPort)) }
+                            peerPort = srcPort
                             sendCmd(sock, peer, peerPort, VIDEO_CMD)
                             sendCmdRaw(sock, peer, peerPort, VIDEO_CMD)
                         } else if (handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)) {
