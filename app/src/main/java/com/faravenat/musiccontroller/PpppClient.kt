@@ -55,24 +55,7 @@ class PpppClient(
                     peer = relayResult.first
                     peerPort = relayResult.second
                     withContext(Dispatchers.Main) { onStatus("Relay OK: ${peer.hostAddress}:$peerPort") }
-
-                    // Handshake igual que discovery local: PROBE → esperar PUNCH → echo → P2P_RDY
-                    val punchBuf = ByteArray(2048)
-                    val punchPkt = DatagramPacket(punchBuf, punchBuf.size)
-                    sock.soTimeout = 5000
-                    sock.send(DatagramPacket(PROBE, PROBE.size, peer, peerPort))
-                    try {
-                        punchPkt.setData(punchBuf)
-                        sock.receive(punchPkt)
-                        if ((punchBuf[1].toInt() and 0xFF) == MSG_PUNCH) {
-                            val echo = punchBuf.copyOf(punchPkt.length)
-                            repeat(5) { sock.send(DatagramPacket(echo, echo.size, peer, peerPort)) }
-                            punchPkt.setData(punchBuf)
-                            sock.receive(punchPkt)  // esperar P2P_RDY (ignoramos si no llega)
-                        }
-                    } catch (_: java.net.SocketTimeoutException) {
-                        // La cámara puede no enviar PUNCH vía relay — continuar igual
-                    }
+                    // Via relay la cámara ya está lista — no se necesita PROBE/PUNCH
                 } else {
                     // 2. Fallback: discovery local por broadcast y ARP
                     withContext(Dispatchers.Main) { onStatus("Buscando en red local...") }
@@ -120,8 +103,9 @@ class PpppClient(
                     peerPort = foundPort
                 }
 
-                // Pedir stream de video
-                sendCmd(sock, peer, peerPort, VIDEO_CMD)
+                // Pedir stream de video — enviar cifrado y sin cifrar por si acaso
+                sendCmd(sock, peer, peerPort, VIDEO_CMD)          // cifrado XOR
+                sendCmdRaw(sock, peer, peerPort, VIDEO_CMD)       // sin cifrar
                 withContext(Dispatchers.Main) { onStatus("Conectado — ${peer.hostAddress}") }
 
                 // Loop de recepción de video
@@ -155,10 +139,15 @@ class PpppClient(
 
                         handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)
                     } catch (_: java.net.SocketTimeoutException) {
-                        if (pktCount == 0)
-                            withContext(Dispatchers.Main) { onStatus("Sin respuesta de cámara") }
-                        val alive = byteArrayOf(0xf1.toByte(), MSG_ALIVE.toByte(), 0x00, 0x00)
-                        sock.send(DatagramPacket(alive, alive.size, peer, peerPort))
+                        if (pktCount == 0) {
+                            // Reintentar ambas versiones del comando
+                            sendCmd(sock, peer, peerPort, VIDEO_CMD)
+                            sendCmdRaw(sock, peer, peerPort, VIDEO_CMD)
+                            withContext(Dispatchers.Main) { onStatus("Reintentando...") }
+                        } else {
+                            val alive = byteArrayOf(0xf1.toByte(), MSG_ALIVE.toByte(), 0x00, 0x00)
+                            sock.send(DatagramPacket(alive, alive.size, peer, peerPort))
+                        }
                     }
                 }
 
@@ -297,15 +286,21 @@ class PpppClient(
         val enc = PpppCipher.encode(json)
         val size = 4 + enc.size
         val pkt = ByteArray(8 + enc.size)
-        pkt[0] = 0xf1.toByte()
-        pkt[1] = 0xd0.toByte()
-        pkt[2] = (size shr 8).toByte()
-        pkt[3] = (size and 0xFF).toByte()
-        pkt[4] = 0xd1.toByte()
-        pkt[5] = 0x00
-        pkt[6] = 0x00
-        pkt[7] = 0x00
+        pkt[0] = 0xf1.toByte(); pkt[1] = 0xd0.toByte()
+        pkt[2] = (size shr 8).toByte(); pkt[3] = (size and 0xFF).toByte()
+        pkt[4] = 0xd1.toByte(); pkt[5] = 0x00; pkt[6] = 0x00; pkt[7] = 0x00
         enc.copyInto(pkt, 8)
+        sock.send(DatagramPacket(pkt, pkt.size, peer, port))
+    }
+
+    // Igual que sendCmd pero sin cifrar — para cámaras que esperan JSON plano
+    private fun sendCmdRaw(sock: DatagramSocket, peer: InetAddress, port: Int, json: ByteArray) {
+        val size = 4 + json.size
+        val pkt = ByteArray(8 + json.size)
+        pkt[0] = 0xf1.toByte(); pkt[1] = 0xd0.toByte()
+        pkt[2] = (size shr 8).toByte(); pkt[3] = (size and 0xFF).toByte()
+        pkt[4] = 0xd1.toByte(); pkt[5] = 0x00; pkt[6] = 0x00; pkt[7] = 0x00
+        json.copyInto(pkt, 8)
         sock.send(DatagramPacket(pkt, pkt.size, peer, port))
     }
 
