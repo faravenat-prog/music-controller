@@ -128,19 +128,35 @@ class PpppClient(
                 sock.soTimeout = 3000
                 val videoBuf = ByteArray(65536)
                 val videoPkt = DatagramPacket(videoBuf, videoBuf.size)
-                var drwCount = 0
+                var pktCount = 0
 
                 while (isActive) {
                     try {
                         videoPkt.setData(videoBuf)
                         sock.receive(videoPkt)
-                        val gotDrw = handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)
-                        if (gotDrw) {
-                            drwCount++
-                            if (drwCount == 1)
-                                withContext(Dispatchers.Main) { onStatus("Datos de cámara recibidos") }
+                        pktCount++
+
+                        // Dump del primer paquete recibido (cualquier tipo)
+                        if (pktCount == 1) {
+                            val plen = videoPkt.length
+                            val tipo = if (plen >= 2) "0x%02X".format(videoBuf[1]) else "?"
+                            val hex = videoBuf.slice(0 until minOf(plen, 32))
+                                .joinToString(" ") { "%02X".format(it) }
+                            if (dumpDir != null) {
+                                runCatching {
+                                    java.io.File(dumpDir, "camera_dump.txt")
+                                        .writeText("tipo=$tipo len=$plen\n$hex\n")
+                                }
+                            }
+                            withContext(Dispatchers.Main) {
+                                onStatus("Pkt#1 tipo=$tipo len=$plen")
+                            }
                         }
+
+                        handlePacket(videoBuf, videoPkt.length, sock, peer, peerPort)
                     } catch (_: java.net.SocketTimeoutException) {
+                        if (pktCount == 0)
+                            withContext(Dispatchers.Main) { onStatus("Sin respuesta de cámara") }
                         val alive = byteArrayOf(0xf1.toByte(), MSG_ALIVE.toByte(), 0x00, 0x00)
                         sock.send(DatagramPacket(alive, alive.size, peer, peerPort))
                     }
@@ -222,15 +238,6 @@ class PpppClient(
                 val channel = buf[5].toInt() and 0xFF
                 val dataLen = payloadSize - 4
                 if (dataLen > 0 && 8 + dataLen <= len && (channel == 0 || channel == 1)) {
-                    if (!rawDumpDone && dumpDir != null) {
-                        rawDumpDone = true
-                        val dumpLen = minOf(dataLen, 256)
-                        val hex = buf.slice(8 until 8 + dumpLen)
-                            .joinToString(" ") { "%02X".format(it) }
-                        val file = java.io.File(dumpDir, "camera_dump.txt")
-                        file.writeText("ch=$channel dataLen=$dataLen\n$hex\n")
-                        onStatus("Dump guardado: camera_dump.txt (ch$channel ${dataLen}b)")
-                    }
                     feedVideoBytes(buf, 8, dataLen)
                     return true
                 }
