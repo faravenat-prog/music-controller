@@ -61,9 +61,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Cámara IP WiFi A9 (protocolo PPPP)
-    private var ppppClient: PpppClient? = null
+    // Cámara IP Webcam (celular viejo por hotspot)
+    private var ipWebcamClient: IpWebcamClient? = null
     private var cameraActive = false
+    companion object {
+        const val IPWEBCAM_URL = "http://192.168.43.100:8080/video"
+    }
 
 
     // GPS
@@ -201,19 +204,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- Cámara IP WiFi A9 (protocolo PPPP/MJPEG) ---
+    // --- Cámara IP Webcam (celular viejo vía hotspot) ---
 
     private fun setupCameraButton() {
         binding.btnCamera.setOnClickListener {
-            if (ppppClient != null) stopCamera() else startCamera()
+            if (ipWebcamClient != null) stopCamera() else startCamera()
         }
     }
 
     private fun startCamera() {
-        val client = PpppClient(
-            dumpDir = getExternalFilesDir(null),
+        val client = IpWebcamClient(
+            streamUrl = IPWEBCAM_URL,
             onFrame = { jpegBytes ->
-                val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return@PpppClient
+                val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size) ?: return@IpWebcamClient
                 runOnUiThread {
                     binding.cameraPreview.setImageBitmap(bmp)
                     if (!cameraActive) {
@@ -226,20 +229,18 @@ class MainActivity : AppCompatActivity() {
             onStatus = { msg ->
                 runOnUiThread {
                     Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-                    if (msg.startsWith("Error") || msg.startsWith("Cámara no")) {
-                        stopCamera()
-                    }
+                    if (msg.startsWith("Error")) stopCamera()
                 }
             }
         )
-        ppppClient = client
+        ipWebcamClient = client
         client.start(lifecycleScope)
         binding.btnCamera.setImageResource(R.drawable.ic_camera_off)
     }
 
     private fun stopCamera() {
-        ppppClient?.stop()
-        ppppClient = null
+        ipWebcamClient?.stop()
+        ipWebcamClient = null
         cameraActive = false
         binding.cameraPreview.visibility = View.GONE
         binding.btnCamera.setImageResource(R.drawable.ic_camera_on)
