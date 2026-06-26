@@ -49,7 +49,7 @@ class PpppClient(
                 }.getOrNull()
 
                 val peer: InetAddress
-                val peerPort: Int
+                var peerPort: Int
 
                 if (relayResult != null) {
                     peer = relayResult.first
