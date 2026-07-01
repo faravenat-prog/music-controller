@@ -9,7 +9,7 @@ App Android fullscreen para controlar Spotify durante ciclismo. Samsung A54, Mi 
 
 - Kotlin, Android nativo, minSdk 26
 - MediaSessionManager + NotificationListenerService para controlar otras apps (Spotify, YouTube Music, etc.)
-- **PpppClient.kt** — protocolo PPPP UDP nativo para cámara IP A9 (reemplazó ExoPlayer/RTSP y CameraX)
+- **IpWebcamClient.kt** — lee stream MJPEG por HTTP desde app IP Webcam en celular viejo
 - LocationManager (GPS) para velocidad en tiempo real
 - Health Connect para pulso Mi Band 8
 - ViewBinding, Material Design 3
@@ -63,9 +63,8 @@ App Android fullscreen para controlar Spotify durante ciclismo. Samsung A54, Mi 
 | `app/src/main/res/layout/activity_main.xml` | Layout principal |
 | `app/src/main/java/com/faravenat/musiccontroller/MainActivity.kt` | Lógica principal |
 | `app/src/main/java/com/faravenat/musiccontroller/MediaService.kt` | Servicio media |
-| `app/src/main/java/com/faravenat/musiccontroller/PpppClient.kt` | Cliente cámara IP A9 |
-| `app/src/main/java/com/faravenat/musiccontroller/PpppCipher.kt` | Cifrado XOR PPPP |
-| `app/src/main/java/com/faravenat/musiccontroller/CloudRelay.kt` | Cloud relay PPPP/iLnkP2P |
+| `app/src/main/java/com/faravenat/musiccontroller/IpWebcamClient.kt` | Cliente cámara IP Webcam (MJPEG HTTP) |
+| `app/src/main/res/xml/network_security_config.xml` | Permite HTTP plano en red local |
 | `.github/workflows/build.yml` | CI/CD GitHub Actions |
 | `app/src/main/res/drawable/ic_launcher_foreground.xml` | Ícono foreground |
 
@@ -76,7 +75,6 @@ App Android fullscreen para controlar Spotify durante ciclismo. Samsung A54, Mi 
 1. **Mejorar ícono** — retomar diseño, el usuario no quedó conforme (prioridad inmediata)
 2. **Pulso Mi Band 8** — leer desde Health Connect
    - Confirmar: ¿tiene Health Connect? ¿Mi Fitness sincroniza con Health Connect?
-3. **Cámara celular viejo vía IP Webcam** — ✅ FUNCIONANDO (2026-06-26)
 
 ---
 
