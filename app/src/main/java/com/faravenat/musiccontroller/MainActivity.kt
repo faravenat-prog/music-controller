@@ -207,16 +207,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupCameraButton() {
         binding.btnCamera.setOnClickListener {
-            if (ipWebcamClient != null) {
-                stopCamera()
-            } else {
-                val savedIp = prefs.getString("camera_ip", null)
-                if (savedIp != null) startCamera(savedIp) else showIpDialog()
-            }
-        }
-        binding.btnCamera.setOnLongClickListener {
+            stopCamera()
             showIpDialog()
-            true
         }
     }
 
