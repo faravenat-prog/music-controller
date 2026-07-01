@@ -90,9 +90,8 @@ App Android fullscreen para controlar Spotify durante ciclismo. Samsung A54, Mi 
 
 ### Uso en la app
 
-- **Tap corto** en botón cámara (cuando está apagada) → conecta con la IP guardada; si es la primera vez pide la IP
-- **Tap largo** en botón cámara → abre diálogo para cambiar la IP
-- **Tap corto** cuando cámara activa → detiene el stream
+- **Tap** en botón cámara → siempre abre diálogo con la IP guardada; conecta al confirmar
+- Si la cámara estaba activa, la detiene primero y luego abre el diálogo (permite cambiar a otro celular)
 - La IP se guarda en SharedPreferences — se recuerda entre sesiones
 
 ### Implementación
@@ -109,6 +108,7 @@ App Android fullscreen para controlar Spotify durante ciclismo. Samsung A54, Mi 
 | `010f57d` | ✅ Reemplaza cámara A9/PPPP por IP Webcam (MJPEG HTTP) |
 | `9c7372e` | ✅ IP configurable con diálogo, guardada en SharedPreferences |
 | `da502a6` | ✅ Fix cleartext HTTP — network_security_config para red local |
+| `1142e0d` | ✅ Botón cámara siempre pide IP — permite cambiar celular con un tap |
 
 ---
 
